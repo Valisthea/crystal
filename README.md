@@ -2,10 +2,10 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 001</h1>
+<h1 align="center">Crystal V1.00 Build 005</h1>
 
 <p align="center">
-  <em>A protocol-oriented security research engine for smart contracts.</em><br>
+  <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
   <strong>It produces evidence. It never produces a confirmed finding.</strong>
 </p>
 
@@ -13,7 +13,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-138%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-188%20passing-brightgreen">
 </p>
 
 ---
@@ -39,6 +39,10 @@ Where it differs from its neighbours:
 Crystal answers a different question. Not *"does this match a known bug
 pattern?"* but *"what does this protocol's state actually do, and where does it
 behave asymmetrically?"*
+
+It also reads **across** modules. Some defects are absent from every file taken
+alone and exist only in how a runtime wires modules together — see
+[Cross-module composition](#cross-module-composition).
 
 ## What Crystal is not
 
@@ -111,9 +115,25 @@ crystal scan ./target --lang rust --no-solc
 crystal scan ./target --detectors reentrancy,access-control
 crystal scan ./target --no-treesitter          # force the fallback parsers
 crystal scan ./target --no-foundry             # skip real-EVM execution
+crystal scan ./target --include-tests          # research fixtures too
 ```
 
 Output formats: `json`, `markdown`, `sarif`, `arcadia`.
+
+### Detectors
+
+| Detector | Fires on |
+| --- | --- |
+| `reentrancy-ordering` | an external call transfers control before the state update that guards it |
+| `missing-access-control` | an entry point writes authority-bearing state with no observable check on the caller |
+| `first-depositor-inflation` | share issuance divides by a supply an early depositor can skew |
+| `oracle-manipulation-surface` | accounting consumes a price movable inside one transaction |
+| `unbounded-input-in-value-op` | a caller-chosen value with no upper bound reaches the amount position of a value operation |
+| `ignored-outcome-in-settlement` | a settlement frame is handed the operation's result, discards it, and moves value anyway |
+| `pipeline-guard-bypass` | one stage of a runtime pipeline moves value through a mechanism another stage's guard does not cover |
+
+Every signal carries a line-anchored ordered trace and a falsification list, and
+is `RESEARCH` status. None of them can produce a confirmed finding.
 
 ---
 
@@ -186,7 +206,10 @@ symbolic engine ────► state deltas as canonical polynomials
 graphs ─────────────► CFG (basic blocks) · call graph · storage layout · dataflow
       │
       ▼
-detectors ──────────► reentrancy · access control · first depositor · oracle
+composition ────────► runtime pipelines · stage roles · Config bindings
+      │
+      ▼
+detectors ──────────► seven structural detectors (see Detectors)
 research engine ────► differential · composition · structural novelty
       │
       ▼
@@ -234,6 +257,71 @@ approximated.
 Substrate storage calls are lowered into ordinary IR assignments, so
 `TotalSupply::<T>::mutate(|t| *t += amount)` yields
 `delta(TotalSupply) = ARG:amount` exactly like Solidity's `+=`.
+
+Test fixtures are classified and excluded from research by default. A mock
+runtime mutates state and skips authority checks *by design*, so leaving it in
+means every signal lands on the test builder rather than on production code.
+They are still parsed and still listed, under `excluded_test_contracts`;
+`--include-tests` restores them.
+
+### Cross-module composition
+
+Some defects are not in any file. A Substrate runtime composes extensions into
+an ordered tuple where every stage runs on every transaction:
+
+```rust
+pub type TxExtension = (
+    …
+    ReversibleTransactionExtension<Runtime>,   // [7] rejects protected accounts
+    WormholeProofRecorderExtension<Runtime>,   // [8]
+    ChargeTransactionPayment<Runtime>,         // [9] debits the signer
+    …
+);
+```
+
+Read stage 7 and it is correct. Read stage 9 and it is correct. They disagree
+only in composition: the guard gates *call dispatch*, the payment stage takes a
+*fee*, and a fee is not a dispatch. Crystal reports it:
+
+```
+[7] ReversibleTransactionExtension GUARD       — gates call-dispatch
+[8] WormholeProofRecorderExtension OBSERVES
+[9] ChargeTransactionPayment       MOVES-VALUE — debits the signer via fees
+    -> OnChargeTransaction::withdraw_fee -> FungibleAdapter
+boundary: stage 9 debits the signer through fees, which stage 7 does not
+          cover: it gates call-dispatch
+```
+
+Three things make this usable rather than noisy:
+
+- **A guard is about authority, not rejection.** `CheckNonce` rejects
+  constantly and guards nothing — it compares a counter. Stages are classified
+  `GUARD` / `MOVES-VALUE` / `CHECKS-ONLY` / `OBSERVES`, and only a rejection
+  that consults restriction state about a principal counts as a guard. The
+  `CHECKS-ONLY` stages are named in the evidence, so the report says why they
+  were not treated as guards.
+- **Coverage is decided by mechanism.** A guard on transfers covering a
+  transfer is the system working, and stays silent.
+- **Associated types are resolved.** `T::OnChargeTransaction::withdraw_fee`
+  points nowhere until `impl pallet_x::Config for Runtime` is read; Crystal
+  reads it, so the debit lands on the implementation that actually moves value.
+  A stage inherits what its bound implementation does.
+
+Both runtime macro formats are supported (`#[frame_support::runtime]` and
+`construct_runtime!`), and mock runtimes are excluded from the topology.
+
+**Only declared composition is visible** — tuples, runtime macros, Config
+impls. Composition that emerges at runtime is not, and a boundary Crystal does
+not report is not evidence of absence. Scanning a single pallet cannot show
+composition at all, so Crystal warns instead of reporting zero crossings as a
+result:
+
+```
+WARNING: scanning without a runtime crate. Cross-module composition requires
+the runtime (with construct_runtime! / #[frame_support::runtime] and the
+TxExtension tuple). Run `crystal scan <workspace_root>` for full pipeline
+analysis; intra-module signals are unaffected.
+```
 
 ---
 
@@ -324,8 +412,8 @@ Environment variables: `CRYSTAL_NO_TREESITTER`, `CRYSTAL_NO_FOUNDRY`.
 ## Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the architecture contract and non-goals
-- [CRYSTAL_V2.0.md](CRYSTAL_V2.0.md) — what changed in this build
-- [CHANGELOG.md](CHANGELOG.md) — version history
+- [CHANGELOG.md](CHANGELOG.md) — build history, and what each build measured
+- [CRYSTAL_V2.0.md](CRYSTAL_V2.0.md) — the Build 001 engine rebuild
 - [INTEGRATION.md](INTEGRATION.md) — consuming Crystal from another system
 - [LAB_HANDOFF.md](LAB_HANDOFF.md) — laboratory handoff notes
 
