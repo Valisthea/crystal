@@ -7,7 +7,13 @@ finding gate remains the only component allowed to weigh evidence.
 
 from __future__ import annotations
 
-from . import access_control, first_depositor, oracle_manipulation, reentrancy
+from . import (
+    access_control,
+    first_depositor,
+    oracle_manipulation,
+    reentrancy,
+    unbounded_input,
+)
 from .base import DetectorSignal
 
 DETECTORS = {
@@ -15,6 +21,7 @@ DETECTORS = {
     "access-control": access_control,
     "first-depositor": first_depositor,
     "oracle-manipulation": oracle_manipulation,
+    "unbounded-input": unbounded_input,
 }
 
 __all__ = ["DETECTORS", "DetectorSignal", "detector_names", "run_detectors"]
@@ -24,13 +31,39 @@ def detector_names() -> list[str]:
     return sorted(DETECTORS)
 
 
-def run_detectors(contracts, engine=None, selected=None) -> list[DetectorSignal]:
+def _is_test_function(contracts, item) -> bool:
+    for contract in contracts:
+        if contract.name != item.contract:
+            continue
+        for function in contract.functions:
+            if function.name == item.function:
+                return bool(function.is_test)
+    return False
+
+
+def run_detectors(contracts, engine=None, selected=None,
+                  include_tests: bool = False) -> list[DetectorSignal]:
+    """Run the selected detectors over production code.
+
+    Test fixtures are excluded by default. A mock runtime or an `ExtBuilder`
+    mutates state and skips authority checks by design, so every detector fires
+    on it and buries the production signal underneath.
+    """
     wanted = set(selected) if selected else set(DETECTORS)
+    targets = contracts if include_tests else [
+        contract for contract in contracts
+        if not getattr(contract, "is_test", False)
+    ]
     signals: list[DetectorSignal] = []
     for name, module in sorted(DETECTORS.items()):
         if name not in wanted:
             continue
-        signals.extend(module.detect(contracts, engine))
+        signals.extend(module.detect(targets, engine))
+    if not include_tests:
+        signals = [
+            item for item in signals
+            if not _is_test_function(contracts, item)
+        ]
 
     merged: dict[str, DetectorSignal] = {}
     for item in signals:

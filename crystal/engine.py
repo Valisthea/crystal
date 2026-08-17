@@ -31,10 +31,17 @@ from .symbolic import SymbolicEngine
 
 
 def research(project, use_solc=True, languages=None, run_detector_pass=True,
-             use_foundry=True, detectors=None):
+             use_foundry=True, detectors=None, include_tests=False):
     sources = discover(project, languages=languages)
     parsed = parse_project(sources)
-    contracts = parsed.contracts
+    all_contracts = parsed.contracts
+    # Fixtures are parsed and reported, but kept out of research. A mock runtime
+    # produces state deltas and unguarded writes by design; leaving it in means
+    # the only deltas Crystal reports are the test builder's.
+    test_contracts = [c for c in all_contracts if c.is_test]
+    contracts = all_contracts if include_tests else [
+        c for c in all_contracts if not c.is_test
+    ]
     # Base-contract state must be attributed to derived contracts before any
     # analysis runs, otherwise every inherited variable looks untouched.
     inheritance = link_inheritance(contracts)
@@ -87,9 +94,13 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
         "parsers": parser_report(),
         "parser_backends": parsed.parser,
         "parse_diagnostics": parsed.diagnostics,
-        "detectors": run_detectors(contracts, symbolic_engine, detectors)
+        "detectors": run_detectors(contracts, symbolic_engine, detectors,
+                                   include_tests=include_tests)
         if run_detector_pass else [],
         "use_foundry": use_foundry,
+        "all_contracts": all_contracts,
+        "test_contracts": test_contracts,
+        "include_tests": include_tests,
     }
     result = run_research(result)
     result["project"] = str(project)

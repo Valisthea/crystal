@@ -1,5 +1,82 @@
 # Changelog
 
+## Crystal V1.00 Build 002 — the tip nobody bounded
+
+Build 001 was measured against a confirmed Critical it had never seen: **F5,
+uncapped transaction tip drains a high-security account past the guardian**, in
+`pallet-transaction-payment` (Substrate/Rust, Quantus). It parsed the pallet
+cleanly — 7 files, 20 types, 59 functions with IR — and reported nothing that
+mattered. Two detector signals, both `missing-access-control` on `ExtBuilder`,
+a test helper. Two state deltas, both on the same test helper.
+
+Three defects, each fixed and each pinned by a regression test.
+
+**The production surface was invisible because fixtures crowded it out.** Every
+delta Crystal produced came from `tests.rs`. A mock runtime mutates state and
+skips authority checks *by design*, so every detector fires on it. Fixtures are
+now classified — by path, by `#[cfg(test)]`, by `mod tests`, and for Solidity by
+`*.t.sol` and `Test`/`DSTest` inheritance — and excluded from research, not just
+from detectors. They are still parsed and still reported, under
+`excluded_test_contracts`, because silently dropping code is its own defect.
+`--include-tests` restores the old behaviour.
+
+The classifier was itself wrong on the first pass: matching `bench` as a
+substring caught `cfg(feature = "runtime-benchmarks")` on `FungibleAdapter`, a
+production adapter, and one benchmark-gated method marked the entire type a
+fixture. Markers are now anchored on the whole attribute, and a type is a
+fixture only when *everything* in it is.
+
+**The tip was invisible because three parsing layers each dropped it.**
+`ChargeTransactionPayment` is a tuple struct — `(#[codec(compact)] BalanceOf<T>)`
+— and its single field, addressed as `self.0`, is the tip. It was extracted as
+nothing: tuple structs use `ordered_field_declaration_list`, which the parser
+did not read. Then `self.0` lost its field, because the expression reader only
+continued a path on `.name`, never `.0`. Then the call that spends it,
+`…::withdraw_fee(who, call, info, fee_with_tip, tip).map(|li| …)`, was recorded
+as a call to **`map`** — the chain was classified by its last segment. And
+`compute_fee(len as u32, info, tip)` lost two of its three arguments, because
+the `as` cast stopped the argument loop.
+
+All four are fixed: tuple fields, `.0` paths, Result/Option combinator
+unwrapping, `?` propagation, `as` casts, and `::<T>::` turbofish paths. An
+unparsed construct in an argument list now skips to the next separator instead
+of truncating the rest.
+
+**A type the runtime decodes from the transaction is attacker input.** This is
+not a heuristic: `TransactionExtension` means "decoded from the transaction", so
+every field of an implementor is chosen by whoever signed it. Such fields now
+resolve to `ARG:` symbols rather than protocol state, which is what makes the
+taint visible at all.
+
+**New detector: `unbounded-input-in-value-op`.** A caller-chosen value reaching
+the amount position of a value-bearing operation with no observed upper bound.
+It reports the shape that matters and not the shape that doesn't: a plain
+`transfer(to, amount)` debited from the caller's own balance is deliberately
+**not** reported, or the real signal drowns. It fires when the value is a
+decoded field, or when it is one term of a larger total it can dominate. It also
+cites *sibling caps* — the same type explicitly capping other inputs is the
+codebase saying it knows the difference. `saturating_*` is explicitly not read
+as a bound: it stops the addition from overflowing, it does not cap the operand.
+
+On F5 it now produces, at 0.82:
+
+    ChargeTransactionPayment.withdraw_fee     lib.rs:826
+      withdraw_fee(ARG:who, ARG:call, ARG:info, ARG:fee_with_tip, ARG:self.0)
+      arg4 `tip` = ARG:self.0 (decoded from the transaction)
+      no upper-bound guard observed on this path
+      the same type caps other inputs explicitly: get_priority:881 …max(Weight…)
+
+which is the benchmark's Signal 1. The `ExtBuilder` false positives are gone.
+Adding `ensure!(tip <= T::MaxTip::get(), …)` clears the signal, so the detector
+reacts to the guard and not to the function name — pinned by a test.
+
+**Not claimed.** Signals 2 and 3 of the benchmark are still missed: cross-pallet
+composition through the `TxExtension` tuple, and the refund-path analysis
+showing the tip is never returned on a failed dispatch. Cross-module composition
+is not implemented. This build closes the input-taint gap, nothing wider.
+
+Tests: 150 passing (31 v1 + 107 v2 + 12 new F5 regressions).
+
 ## Crystal V1.00 Build 001 — engine rebuild
 
 Full notes: [CRYSTAL_V2.0.md](CRYSTAL_V2.0.md).

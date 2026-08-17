@@ -64,6 +64,12 @@ class Function:
     parser: str = "regex"
     path: str = ""
     payable: bool = False
+    # Test fixtures produce state deltas and unguarded writes that look exactly
+    # like production defects. Classifying them is what keeps the signal clean.
+    is_test: bool = False
+    # Parameters an untrusted caller supplies (an extrinsic's arguments minus
+    # `origin`, an external function's arguments). Empty means "not determined".
+    user_inputs: list[str] = field(default_factory=list)
 
     @property
     def signature(self) -> str:
@@ -125,6 +131,14 @@ class Contract:
     using_for: list[tuple[str, str]] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)
     parser: str = "regex"
+    is_test: bool = False
+    # Traits/interfaces this type implements, beyond declared inheritance.
+    traits: list[str] = field(default_factory=list)
+    # True when the type is decoded from untrusted input rather than built by
+    # the runtime: a Substrate TransactionExtension is decoded straight from the
+    # transaction, so every one of its fields is attacker-chosen by contract.
+    user_decoded: bool = False
+    module: str = ""
 
     @property
     def state_names(self) -> set[str]:

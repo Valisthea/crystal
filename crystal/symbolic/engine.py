@@ -51,6 +51,16 @@ ATTACKER_INPUTS = {"msg.value", "msg.data"}
 DECLARED_NAME_RE = re.compile(r"([A-Za-z_]\w*)\s*$")
 
 
+@dataclass(frozen=True)
+class CallRecord:
+    """A call as executed: its arguments resolved to symbolic values."""
+
+    call: object
+    arguments: tuple[SymExpr, ...]
+    constraints: tuple[Constraint, ...]
+    caller: str
+
+
 @dataclass
 class _Context:
     state: SymbolicState
@@ -65,14 +75,20 @@ class _Context:
     feasible: bool = True
     depth: int = 0
     stack: tuple[str, ...] = ()
+    # True when the enclosing type is decoded from untrusted input, which makes
+    # its fields attacker-chosen rather than protocol state.
+    user_decoded: bool = False
+    call_records: list[CallRecord] = field(default_factory=list)
 
     def fork(self) -> "_Context":
-        return _Context(
+        clone = _Context(
             self.state.clone(), dict(self.locals), set(self.params),
             set(self.state_names), list(self.constraints), list(self.unsupported),
             list(self.external_calls), self.suffix, self.origin, self.feasible,
-            self.depth, self.stack,
+            self.depth, self.stack, self.user_decoded,
         )
+        clone.call_records = list(self.call_records)
+        return clone
 
     def note(self, message: str) -> None:
         if message not in self.unsupported:
@@ -102,9 +118,11 @@ class SymbolicEngine:
         self.functions: dict[str, Function] = {}
         self.by_contract: dict[str, dict[str, Function]] = {}
         self.state_names: dict[str, set[str]] = {}
+        self.user_decoded: dict[str, bool] = {}
         for contract in self.contracts:
             names = {variable.name for variable in contract.state_vars}
             self.state_names[contract.name] = names
+            self.user_decoded[contract.name] = getattr(contract, "user_decoded", False)
             table = self.by_contract.setdefault(contract.name, {})
             for function in list(contract.functions) + list(contract.modifier_definitions):
                 self.functions[f"{contract.name}.{function.name}"] = function
@@ -138,6 +156,27 @@ class SymbolicEngine:
             branch_dependent=len(paths) > 1,
             expressions=primary.state.deltas(),
         )
+
+    def call_records(self, function: Function) -> list[CallRecord]:
+        """Every call the function makes, with arguments resolved symbolically.
+
+        This is what makes "an unbounded user input reaches a debit" answerable:
+        the amount argument carries `ARG:` symbols exactly when it is derived
+        from caller-supplied data.
+        """
+        state = SymbolicState()
+        contexts = self._execute(function, state, suffix="", depth=0)
+        feasible = [c for c in contexts if c.feasible] or contexts[:1]
+        records: list[CallRecord] = []
+        seen = set()
+        for context in feasible:
+            for record in context.call_records:
+                key = (record.call.line, record.call.callee,
+                       tuple(a.render() for a in record.arguments))
+                if key not in seen:
+                    seen.add(key)
+                    records.append(record)
+        return records
 
     def execute_sequence(self, names) -> SequenceEffect | None:
         functions = [self.functions.get(name) for name in names]
@@ -226,6 +265,7 @@ class SymbolicEngine:
             origin=f"{function.contract}.{function.name}",
             depth=depth,
             stack=stack + (f"{function.contract}.{function.name}",),
+            user_decoded=self.user_decoded.get(function.contract, False),
         )
         if arguments:
             context.locals.update(arguments)
@@ -449,7 +489,18 @@ class SymbolicEngine:
 
     def _record_call(self, statement: I.IRStmt, context: _Context) -> None:
         call = statement.call
-        if call is None or call.kind not in I.EXTERNAL_CALL_KINDS:
+        if call is None:
+            return
+        # Resolve every argument on the path that reaches this call, so a
+        # detector can ask "what actually flows into this amount?" rather than
+        # re-reading the source text.
+        context.call_records.append(CallRecord(
+            call,
+            tuple(self._read(context, argument.text) for argument in call.arguments),
+            tuple(context.constraints),
+            context.origin,
+        ))
+        if call.kind not in I.EXTERNAL_CALL_KINDS:
             return
         label = f"{call.receiver}.{call.callee}" if call.receiver else call.callee
         context.external_calls.append(f"{label}@{call.line}")
@@ -492,6 +543,10 @@ class SymbolicEngine:
             return context.locals[path]
         base = _base_of(path)
         if base in context.state_names:
+            if context.user_decoded:
+                # Fields of a transaction-decoded type are chosen by whoever
+                # signed the transaction, not by the protocol.
+                return SymExpr.symbol(f"{ARG_PREFIX}self.{path}{context.suffix}")
             return context.state.read(path, base)
         if base in context.params:
             return SymExpr.symbol(f"{ARG_PREFIX}{path}{context.suffix}")

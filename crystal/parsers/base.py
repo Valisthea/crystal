@@ -42,8 +42,39 @@ class ParseResult:
         self.diagnostics.extend(other.diagnostics)
 
 
+TEST_PATH_PARTS = {"test", "tests", "mock", "mocks", "testing", "benches",
+                   "fixtures", "__tests__", "spec", "specs"}
+TEST_STEMS = {"tests", "test", "mock", "mocks", "benchmarking", "fixtures",
+              "conftest", "testing"}
+TEST_BASE_CONTRACTS = {"test", "dstest", "stdcheats", "stdassertions",
+                       "stdinvariant", "basetest", "foundrytest"}
+# Deliberately narrow. Excluding production code from research is a worse
+# failure than researching a fixture, so only unambiguous markers qualify:
+# `Builder`, `Stub` and `Fake` were dropped because real protocols use them.
+TEST_NAME_SUFFIXES = ("test", "tests", "mock", "mocks", "harness", "fixture")
+
+
 def detect_language(path) -> str | None:
     return LANGUAGE_BY_SUFFIX.get(Path(path).suffix.lower())
+
+
+def is_test_source(path) -> bool:
+    """True when the file is a fixture rather than production code."""
+    source = Path(path)
+    name = source.name.lower()
+    if name.endswith((".t.sol", ".spec.sol", "_test.sol", ".test.sol")):
+        return True
+    if source.stem.lower() in TEST_STEMS:
+        return True
+    return any(part.lower() in TEST_PATH_PARTS for part in source.parts)
+
+
+def looks_like_test_contract(contract) -> bool:
+    """Fixture by inheritance or by name, for languages without attributes."""
+    lowered = contract.name.lower()
+    if any(base.lower() in TEST_BASE_CONTRACTS for base in contract.bases):
+        return True
+    return lowered.endswith(TEST_NAME_SUFFIXES)
 
 
 def identifiers_in(text: str) -> tuple[str, ...]:

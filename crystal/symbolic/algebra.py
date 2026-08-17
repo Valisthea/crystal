@@ -316,9 +316,15 @@ class ExpressionReader:
 
     def _postfix(self) -> SymExpr:
         path = self._primary_path()
-        if path is not None:
-            return self._resolve_path(path)
-        return self._primary_value()
+        value = self._resolve_path(path) if path is not None else self._primary_value()
+        # `len as u32` is a width cast, not an operator: the value is unchanged
+        # and the cast must be consumed or the argument list stops here.
+        while self._peek() == "as":
+            self._next()
+            self._primary_path()
+            if self._peek() == "<":
+                self._skip_generics()
+        return value
 
     def _primary_path(self) -> str | None:
         """Read an access chain (`a.b[c]`) and return its canonical path."""
@@ -328,11 +334,23 @@ class ExpressionReader:
         path = self._next()
         while True:
             token = self._peek()
+            # `.0` is a tuple-struct field, not a decimal: `self.0` is how a
+            # Substrate TransactionExtension reads the value it was decoded with.
             if token == "." and self.position + 1 < len(self.tokens) \
-                    and self.tokens[self.position + 1][0] == "name":
+                    and self.tokens[self.position + 1][0] in {"name", "number"}:
                 self._next()
                 path += "." + self._next()
                 continue
+            # Rust paths use `::`, optionally with a turbofish: `Pallet::<T>::f`.
+            if token == "::":
+                self._next()
+                if self._peek() == "<":
+                    self._skip_generics()
+                    continue
+                if self._peek_kind() == "name":
+                    path += "." + self._next()
+                    continue
+                break
             if token == "[":
                 self._next()
                 index = self._ternary()
@@ -344,6 +362,34 @@ class ExpressionReader:
                 return None
             break
         return path
+
+    def _skip_to_separator(self) -> bool:
+        """Advance to just past the next top-level comma; False at the end."""
+        depth = 0
+        while self.position < len(self.tokens):
+            token = self._peek()
+            if token in {"(", "[", "{"}:
+                depth += 1
+            elif token in {")", "]", "}"}:
+                if depth == 0:
+                    return False
+                depth -= 1
+            elif token == "," and depth == 0:
+                self._next()
+                return True
+            self._next()
+        return False
+
+    def _skip_generics(self) -> None:
+        depth = 0
+        while self.position < len(self.tokens):
+            token = self._next()
+            if token == "<":
+                depth += 1
+            elif token == ">":
+                depth -= 1
+                if depth <= 0:
+                    return
 
     def _primary_value(self) -> SymExpr:
         kind = self._peek_kind()
@@ -374,10 +420,18 @@ class ExpressionReader:
 
     def _call(self) -> SymExpr:
         name = self._next()
-        while self._peek() in {".", "::"} and self.position + 1 < len(self.tokens) \
-                and self.tokens[self.position + 1][0] == "name":
-            self._next()
-            name += "." + self._next()
+        while True:
+            if self._peek() == "::" and self.position + 1 < len(self.tokens) \
+                    and self.tokens[self.position + 1][1] == "<":
+                self._next()
+                self._skip_generics()
+                continue
+            if self._peek() in {".", "::"} and self.position + 1 < len(self.tokens) \
+                    and self.tokens[self.position + 1][0] == "name":
+                self._next()
+                name += "." + self._next()
+                continue
+            break
         if self._peek() == "{":
             depth = 0
             while self.position < len(self.tokens):
@@ -391,8 +445,15 @@ class ExpressionReader:
         self._next()
         arguments: list[SymExpr] = []
         while self._peek() and self._peek() != ")":
+            before = self.position
             arguments.append(self._ternary())
-            if not self._accept(","):
+            if self._accept(","):
+                continue
+            if self._peek() in {")", ""}:
+                break
+            # An unparsed construct must not truncate the remaining arguments:
+            # skip to the next top-level separator and keep reading.
+            if not self._skip_to_separator() or self.position == before:
                 break
         self._accept(")")
         simple = name.split(".")[-1]

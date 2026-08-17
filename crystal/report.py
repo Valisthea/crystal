@@ -125,7 +125,14 @@ def payload(result):
             ),
             "evidence_records": len(result.get("evidence_records", [])),
             "quality_passed": bool(quality.passed) if quality else None,
+            "test_contracts_excluded": len(result.get("test_contracts", []))
+            if not result.get("include_tests") else 0,
+            "contracts_parsed_total": len(result.get("all_contracts",
+                                                     result["contracts"])),
         },
+        "excluded_test_contracts": sorted(
+            f"{c.name} ({Path(c.path).name})" for c in result.get("test_contracts", [])
+        ) if not result.get("include_tests") else [],
         "finding_gate": _plain(result.get("finding_gate", {})),
         "evidence_records": [asdict(x) for x in result.get("evidence_records", [])],
         "output_contract": {
@@ -266,6 +273,17 @@ def markdown(data, result=None) -> str:
         if signal["falsification"]:
             lines += ["", "Falsify this before believing it:", ""]
             lines += [f"- {item}" for item in signal["falsification"]]
+        lines.append("")
+
+    if data.get("excluded_test_contracts"):
+        lines += [
+            "## Excluded fixtures", "",
+            f"{len(data['excluded_test_contracts'])} type(s) were classified as test "
+            "fixtures and kept out of research: a mock runtime mutates state and "
+            "skips authority checks by design. Re-run with `--include-tests` to "
+            "research them anyway.", "",
+        ]
+        lines += [f"- `{name}`" for name in data["excluded_test_contracts"][:40]]
         lines.append("")
 
     lines += ["## Contracts", "", "| Contract | Kind | Lang | Functions | Entry points | State | Signals |",

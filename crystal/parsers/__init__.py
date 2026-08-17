@@ -17,6 +17,8 @@ from .base import (
     ParseDiagnostic,
     ParseResult,
     detect_language,
+    is_test_source,
+    looks_like_test_contract,
 )
 
 __all__ = [
@@ -85,7 +87,24 @@ def parse_project(paths) -> ParseResult:
                     ParseDiagnostic(str(path), "error", f"parse failed: {exc}")
                 )
     result.parser = ",".join(sorted(set(used))) or "none"
+    _mark_test_contracts(result.contracts)
     return result
+
+
+def _mark_test_contracts(contracts) -> None:
+    """Classify fixtures uniformly across languages.
+
+    Rust carries `#[cfg(test)]`, but Solidity has no attribute for it: a Foundry
+    test is a contract inheriting `Test` in a `*.t.sol` file. Both end up with
+    the same flag so the pipeline can exclude them from research the same way.
+    """
+    for contract in contracts:
+        if contract.is_test:
+            continue
+        if is_test_source(contract.path) or looks_like_test_contract(contract):
+            contract.is_test = True
+            for function in contract.functions:
+                function.is_test = True
 
 
 def parser_report() -> dict:

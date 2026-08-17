@@ -33,6 +33,8 @@ CAPABILITIES = [
     "symbolic-execution-engine", "statement-ir", "structural-novelty",
     "reentrancy-ordering-detector", "access-control-detector",
     "first-depositor-detector", "oracle-manipulation-detector",
+    "unbounded-input-detector", "test-fixture-classification",
+    "transaction-decoded-input-taint",
     "medusa-backend", "echidna-backend", "halmos-backend",
     "sarif-output", "arcadia-output", "watch-mode", "environment-doctor",
 ]
@@ -64,6 +66,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-detectors", action="store_true")
     scan.add_argument("--no-foundry", action="store_true",
                       help="skip real-EVM execution (harnesses are still generated)")
+    scan.add_argument("--include-tests", action="store_true",
+                      help="research test fixtures too (excluded by default: a mock "
+                           "runtime produces deltas and unguarded writes by design)")
     scan.add_argument("--quiet", "-q", action="store_true")
 
     sub.add_parser("capabilities", help="list engine capabilities")
@@ -209,6 +214,7 @@ def _run_scan(args) -> dict:
         run_detector_pass=not getattr(args, "no_detectors", False),
         use_foundry=not getattr(args, "no_foundry", False),
         detectors=selected,
+        include_tests=getattr(args, "include_tests", False),
     )
 
 

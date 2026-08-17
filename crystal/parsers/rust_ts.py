@@ -42,6 +42,16 @@ STORAGE_READ_METHODS = {
 
 GUARD_MACROS = {"ensure", "assert", "assert_eq", "assert_ne", "debug_assert", "require"}
 
+# Result/Option plumbing. `withdraw(..).map(|x| ..)` is a withdrawal, not a map:
+# classifying the chain by its last segment hides the operation that matters.
+RUST_COMBINATORS = {
+    "map", "map_err", "map_or", "map_or_else", "and_then", "or_else", "unwrap",
+    "unwrap_or", "unwrap_or_default", "unwrap_or_else", "expect", "ok", "ok_or",
+    "ok_or_else", "into", "try_into", "borrow", "borrow_mut", "as_ref", "as_mut",
+    "clone", "to_owned", "cloned", "copied", "into_iter", "iter", "collect",
+    "unwrap_err", "inspect", "inspect_err",
+}
+
 CPI_CALLS = {
     "invoke", "invoke_signed", "invoke_signed_unchecked",
     "transfer", "transfer_checked", "mint_to", "burn", "close_account",
@@ -56,6 +66,44 @@ SUBSTRATE_STORAGE_TYPES = (
     "StorageValue", "StorageMap", "StorageDoubleMap", "StorageNMap",
     "CountedStorageMap", "StorageVec",
 )
+
+# Traits whose implementors are DECODED from the transaction rather than built
+# by the runtime. Every field of such a type is attacker-chosen by contract, not
+# by heuristic: that is what the trait means.
+USER_DECODED_TRAITS = (
+    "TransactionExtension", "SignedExtension", "Decode", "Call",
+)
+
+# Filenames and attributes that mark fixtures. A test builder mutates state and
+# skips authority checks by design; reporting it is noise, not a finding.
+TEST_FILE_STEMS = {"tests", "test", "mock", "mocks", "benchmarking", "fixtures",
+                   "test_utils", "testing", "mock_runtime"}
+TEST_MODULE_NAMES = {"tests", "test", "mock", "mocks", "testing", "benchmarking"}
+
+# Anchored on the whole attribute, not searched as a substring: `bench` matched
+# inside `cfg(feature="runtime-benchmarks")` on a production impl and marked the
+# entire type as a fixture.
+_TEST_ATTRIBUTE_RE = re.compile(
+    r"^(?:test|bench|ignore|should_panic|test_case|rstest|tokio::test"
+    r"|cfg\(test\b|cfg\(any\(test\b|cfg\(all\(test\b"
+    r"|cfg\(feature=\"runtime-benchmarks\"\)"
+    r"|cfg_attr\(test\b)"
+)
+
+
+def _is_test_path(path: str) -> bool:
+    stem = Path(path).stem.lower()
+    if stem in TEST_FILE_STEMS:
+        return True
+    parts = {part.lower() for part in Path(path).parts}
+    return bool(parts & {"tests", "test", "benches", "mock", "mocks"})
+
+
+def _is_test_attribute(attributes: list[str]) -> bool:
+    return any(
+        _TEST_ATTRIBUTE_RE.match(attribute.lower().replace(" ", ""))
+        for attribute in attributes
+    )
 
 
 @lru_cache(maxsize=1)
@@ -95,6 +143,8 @@ class _FileParser:
         self.state_names: set[str] = set()
         self.storage_items: dict[str, StateVar] = {}
         self.unsupported: list[str] = []
+        self.is_test_file = _is_test_path(path)
+        self.test_depth = 0
 
     # -- text helpers ----------------------------------------------------
     def text(self, node) -> str:
@@ -305,7 +355,33 @@ class _FileParser:
                                       self.flat(node), None, (), False),
                         reads=self.state_in(node))
 
+    def _st_try_expression(self, node):
+        # `foo(..)?` — the `?` is error propagation, the call is the operation.
+        inner = node.named_children[0] if node.named_child_count else None
+        return self.statement(inner) if inner is not None else None
+
+    def _unwrap_combinators(self, node):
+        """Descend a `.map(..).ok_or(..)` chain to the call that does the work."""
+        current = node
+        for _ in range(8):
+            function_node = self.field(current, "function")
+            if function_node is None:
+                return current
+            name = re.split(r"::|\.", re.sub(r"<[^>]*>", "", self.flat(function_node)))[-1]
+            if name.strip() not in RUST_COMBINATORS:
+                return current
+            inner = None
+            for candidate in self._walk(function_node):
+                if candidate.type == "call_expression":
+                    inner = candidate
+                    break
+            if inner is None:
+                return current
+            current = inner
+        return current
+
     def _st_call_expression(self, node):
+        node = self._unwrap_combinators(node)
         storage = self._storage_target(node)
         if storage is not None:
             return self._storage_statement(node, *storage)
@@ -470,6 +546,16 @@ class _FileParser:
         function.parser = PARSER_NAME
         function.path = self.path
         function.end_line = node.end_point[0] + 1
+        function.is_test = (
+            self.is_test_file or self.test_depth > 0 or _is_test_attribute(attributes)
+        )
+        # `origin` is supplied by the dispatch layer, not chosen by the caller;
+        # `self` is the decoded extension. Everything else on an entry point is
+        # attacker-chosen.
+        function.user_inputs = [
+            parameter.name for parameter in function.params
+            if parameter.name and parameter.name not in {"self", "origin", "_origin"}
+        ] if kind in {"extrinsic", "instruction"} or visibility in {"external", "public"} else []
         function.ir = I.IRFunctionBody(
             statements=statements, has_assembly=False,
             unsupported=function_unsupported, source=self.text(body_node),
@@ -533,6 +619,17 @@ class _FileParser:
         body = self.field(item, "body")
         if body is None:
             return
+        if body.type == "ordered_field_declaration_list":
+            # Tuple struct: fields are positional, addressed as `self.0`.
+            # `ChargeTransactionPayment(#[codec(compact)] BalanceOf<T>)` holds
+            # the transaction tip in field 0, so missing these loses the input.
+            position = 0
+            for field_node in body.named_children:
+                if field_node.type in {"attribute_item", "visibility_modifier"}:
+                    continue
+                yield (str(position), self.flat(field_node), self.line(field_node))
+                position += 1
+            return
         for field_node in body.named_children:
             if field_node.type == "field_declaration":
                 yield (
@@ -549,11 +646,37 @@ class _FileParser:
         is_pallet = _has_attribute(attributes, "pallet", "frame_support::pallet")
         is_program = _has_attribute(attributes, "program")
 
+        test_module = (
+            _is_test_attribute(attributes) or module_name.lower() in TEST_MODULE_NAMES
+        )
+        if test_module:
+            self.test_depth += 1
+        try:
+            return self._module_body(node, body, module_name, attributes,
+                                     is_pallet, is_program)
+        finally:
+            if test_module:
+                self.test_depth -= 1
+
+    def _module_body(self, node, body, module_name, attributes,
+                     is_pallet, is_program) -> list[Contract]:
         if not (is_pallet or is_program):
+            # A plain `mod` still holds real types. Dropping its impls lost every
+            # struct declared inside a module, production or fixture alike.
             nested: list[Contract] = []
+            structs: dict[str, list] = {}
+            struct_attributes: dict[str, list[str]] = {}
+            impls: list[tuple] = []
             for item, item_attributes in self.items_with_attributes(body):
                 if item.type == "mod_item":
                     nested.extend(self.module(item, item_attributes))
+                elif item.type == "struct_item":
+                    struct_name = self.text(self.field(item, "name"))
+                    structs[struct_name] = list(self._fields(item))
+                    struct_attributes[struct_name] = item_attributes
+                elif item.type == "impl_item":
+                    impls.append((item, item_attributes))
+            nested.extend(self.plain_impls(impls, structs, struct_attributes))
             return nested
 
         name = module_name
@@ -623,6 +746,11 @@ class _FileParser:
 
         self.storage_items = {}
         self.state_names = set()
+        contract.module = module_name
+        contract.is_test = self.is_test_file or self.test_depth > 0
+        if contract.is_test:
+            for function in contract.functions:
+                function.is_test = True
         return [contract]
 
     def plain_impls(self, impls, structs, struct_attributes) -> list[Contract]:
@@ -651,7 +779,13 @@ class _FileParser:
 
             trait_node = self.field(item, "trait")
             if trait_node is not None:
-                contract.bases.append(re.sub(r"<[^>]*>", "", self.flat(trait_node)).strip())
+                trait_name = re.sub(r"<[^>]*>", "", self.flat(trait_node)).strip()
+                contract.bases.append(trait_name)
+                contract.traits.append(trait_name)
+                if any(marker in trait_name for marker in USER_DECODED_TRAITS):
+                    # The trait contract says this type is decoded from the
+                    # transaction, so its fields are attacker-chosen.
+                    contract.user_decoded = True
 
             self.state_names = {v.name for v in contract.state_vars}
             body = self.field(item, "body")
@@ -666,6 +800,17 @@ class _FileParser:
                         attributes + member_attributes,
                     ))
             self.state_names = set()
+
+        for contract in grouped.values():
+            # A type is a fixture only when EVERYTHING in it is. One
+            # benchmark-gated method does not make a production adapter a mock.
+            contract.is_test = self.is_test_file or bool(
+                contract.functions
+                and all(function.is_test for function in contract.functions)
+            )
+            if self.is_test_file:
+                for function in contract.functions:
+                    function.is_test = True
         return list(grouped.values())
 
 

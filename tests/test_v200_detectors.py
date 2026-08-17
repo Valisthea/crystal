@@ -100,6 +100,7 @@ def analyze(source, name="T.sol", only=None):
 def test_detector_registry():
     assert detector_names() == [
         "access-control", "first-depositor", "oracle-manipulation", "reentrancy",
+        "unbounded-input",
     ]
     assert set(DETECTORS) == set(detector_names())
 
