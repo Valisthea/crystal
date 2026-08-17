@@ -146,6 +146,30 @@ class Contract:
 
 
 @dataclass
+class RuntimeWiring:
+    """An ordered composition of modules declared at the runtime level.
+
+    A Substrate `TxExtension` tuple is the clearest case: every listed extension
+    runs on every transaction, in order, so two entries that disagree about what
+    is allowed compose into a bypass. Crystal cannot see that by reading either
+    module alone.
+    """
+
+    name: str
+    kind: str
+    members: list[str] = field(default_factory=list)
+    path: str = ""
+    line: int = 0
+    language: str = RUST
+
+    def index_of(self, member: str) -> int:
+        for position, entry in enumerate(self.members):
+            if entry == member or entry.rsplit("::", 1)[-1] == member:
+                return position
+        return -1
+
+
+@dataclass
 class Observation:
     kind: str
     title: str

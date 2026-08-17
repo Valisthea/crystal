@@ -23,6 +23,7 @@ from .research.engine import run_research
 from .semantics.dataflow import build_dataflow
 from .semantics.inheritance import build_inheritance_graph, link_inheritance
 from .semantics.modifiers import build_modifier_graph, modifier_definitions
+from .semantics.modules import build_module_graph
 from .semantics.proxy import detect_proxy_signals
 from .semantics.proxy import report as proxy_report
 from .semantics.solc_ast import parse_solc_ast
@@ -95,8 +96,11 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
         "parser_backends": parsed.parser,
         "parse_diagnostics": parsed.diagnostics,
         "detectors": run_detectors(contracts, symbolic_engine, detectors,
-                                   include_tests=include_tests)
+                                   include_tests=include_tests,
+                                   wirings=parsed.wirings)
         if run_detector_pass else [],
+        "runtime_wirings": parsed.wirings,
+        "module_graph": build_module_graph(contracts, parsed.wirings),
         "use_foundry": use_foundry,
         "all_contracts": all_contracts,
         "test_contracts": test_contracts,

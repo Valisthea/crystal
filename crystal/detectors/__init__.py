@@ -7,10 +7,14 @@ finding gate remains the only component allowed to weigh evidence.
 
 from __future__ import annotations
 
+import inspect
+
 from . import (
     access_control,
     first_depositor,
+    ignored_outcome,
     oracle_manipulation,
+    pipeline_bypass,
     reentrancy,
     unbounded_input,
 )
@@ -22,6 +26,8 @@ DETECTORS = {
     "first-depositor": first_depositor,
     "oracle-manipulation": oracle_manipulation,
     "unbounded-input": unbounded_input,
+    "pipeline-bypass": pipeline_bypass,
+    "ignored-outcome": ignored_outcome,
 }
 
 __all__ = ["DETECTORS", "DetectorSignal", "detector_names", "run_detectors"]
@@ -42,7 +48,7 @@ def _is_test_function(contracts, item) -> bool:
 
 
 def run_detectors(contracts, engine=None, selected=None,
-                  include_tests: bool = False) -> list[DetectorSignal]:
+                  include_tests: bool = False, wirings=()) -> list[DetectorSignal]:
     """Run the selected detectors over production code.
 
     Test fixtures are excluded by default. A mock runtime or an `ExtBuilder`
@@ -58,7 +64,12 @@ def run_detectors(contracts, engine=None, selected=None,
     for name, module in sorted(DETECTORS.items()):
         if name not in wanted:
             continue
-        signals.extend(module.detect(targets, engine))
+        # Composition detectors need the runtime wiring; the rest do not, and
+        # declaring the parameter is how a detector opts in.
+        if "wirings" in inspect.signature(module.detect).parameters:
+            signals.extend(module.detect(targets, engine, wirings=wirings))
+        else:
+            signals.extend(module.detect(targets, engine))
     if not include_tests:
         signals = [
             item for item in signals

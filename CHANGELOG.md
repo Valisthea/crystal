@@ -1,5 +1,71 @@
 # Changelog
 
+## Crystal V1.00 Build 003 — neither module is wrong on its own
+
+Build 002 closed Signal 1 of the F5 benchmark and explicitly did not claim
+Signals 2 and 3. This build closes both, and the reason they were hard is the
+same reason they matter: **the defect is not inside any one file.**
+
+**Signal 2 — a guard one stage enforces and another never consults.**
+
+    TxExtension = ( .., ReversibleTransactionExtension, .., ChargeTransactionPayment, .. )
+                       index 7: rejects protected accounts
+                                                    index 9: debits the signer
+
+Both stages run on every transaction. The guard covers the call it inspects; the
+payment stage moves value on a different path and never asks. Read either module
+alone and it is correct. Crystal now extracts the runtime wiring (`pub type X =
+(..)` tuples, `construct_runtime!`), resolves each stage to parsed code,
+classifies it as guard / value-mover / unresolved, and reports the pair. Stages
+that resolve to nothing are named as unresolved rather than assumed benign.
+
+The index is the ordering claim, so getting it right mattered: comments are
+named children of a tuple type, and counting them put `ChargeTransactionPayment`
+at 13 instead of 9.
+
+**Signal 3 — a settlement that is handed the outcome and drops it.** Visible in
+the signature alone:
+
+    fn post_dispatch_details(.., _result: &DispatchResult) -> .. {
+        let actual_fee_with_tip = compute_actual_fee(len, info, &post_info, tip);
+        T::OnChargeTransaction::correct_and_deposit_fee(.., actual_fee_with_tip, tip, ..)
+    }
+
+`_result` carries whether the dispatch succeeded; the underscore is Rust for
+"deliberately ignored". The tip is re-added and charged on every path, including
+the one where the user got nothing. The detector fires only when the outcome was
+*received and discarded* — a frame that never gets the outcome is not making
+that mistake and is not flagged. Restoring the parameter and refunding on
+`is_err()` clears the signal, pinned by a test.
+
+**Precision: 18 signals down to 10 on the same scope, with all three kept.**
+Adding detectors without this would have buried the result. Three
+name-and-shape confusions were doing the damage:
+
+- `pallet_balances::Call::<T>::transfer_keep_alive { .. }.into()` was read as an
+  external call. It **constructs** a dispatchable; it executes nothing. Every
+  call-construction looked re-entrant.
+- `DispatchTime::At(..)` and `Ok(..)` were read as calls. Rust says otherwise by
+  convention: functions are snake_case, types and variants are CamelCase.
+- `count_transfers` matched "transfer" as a substring, which turned an
+  event-scanning extension into a false bypass. Value verbs now match whole name
+  segments.
+
+Also reclassified as read-only: `T::Lookup::unlookup`, `T::Hashing::hash_of`,
+and the `is_`/`can_`/`saturating_` families. What survives on
+`reversible-transfers` is four genuine "value operation before state write"
+sites (`hold`, `release`, `schedule_named`, `bound`).
+
+**Not claimed.** Stage classification is structural, not semantic: Crystal
+reports that one stage checks a restriction and another moves value without it.
+Whether the guard *should* have covered that path is a protocol question, which
+is why the falsification list leads with it. Cross-module composition is
+implemented for declared pipelines only — Config-trait associated types are
+still unresolved, so `T::OnChargeTransaction` does not yet route to
+`FungibleAdapter`.
+
+Tests: 161 passing (+11 composition regressions).
+
 ## Crystal V1.00 Build 002 — the tip nobody bounded
 
 Build 001 was measured against a confirmed Critical it had never seen: **F5,

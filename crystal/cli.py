@@ -34,7 +34,9 @@ CAPABILITIES = [
     "reentrancy-ordering-detector", "access-control-detector",
     "first-depositor-detector", "oracle-manipulation-detector",
     "unbounded-input-detector", "test-fixture-classification",
-    "transaction-decoded-input-taint",
+    "transaction-decoded-input-taint", "pipeline-guard-bypass-detector",
+    "ignored-outcome-detector", "cross-module-composition",
+    "runtime-wiring-extraction",
     "medusa-backend", "echidna-backend", "halmos-backend",
     "sarif-output", "arcadia-output", "watch-mode", "environment-doctor",
 ]

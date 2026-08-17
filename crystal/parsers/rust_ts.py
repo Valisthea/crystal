@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .. import ir as I
 from ..models import RUST, Contract, ContractError, ContractEvent, ContractType
-from ..models import Function, Parameter, StateVar
+from ..models import Function, Parameter, RuntimeWiring, StateVar
 from .base import ParseResult
 
 PARSER_NAME = "tree-sitter"
@@ -51,6 +51,24 @@ RUST_COMBINATORS = {
     "clone", "to_owned", "cloned", "copied", "into_iter", "iter", "collect",
     "unwrap_err", "inspect", "inspect_err",
 }
+
+# Conversions and constructors: they produce a value, they do not run anything.
+CONVERSION_CALLS = {
+    "into", "from", "new", "default", "clone", "to_owned", "encode", "decode",
+    "as_ref", "as_mut", "to_vec", "to_string", "try_into", "try_from",
+    "saturated_into", "unique_saturated_into", "using_encoded",
+}
+
+# Lookups, accessors and arithmetic. They read, they do not hand over control.
+READ_ONLY_CALLS = {
+    "lookup", "unlookup", "convert", "current_block_number", "block_number",
+    "len", "is_empty", "count", "contains", "contains_key", "iter", "keys",
+    "values", "decode_len", "min", "max", "abs", "pow", "sqrt", "hash",
+    "account_id", "account_truncating", "sovereign_account", "now", "get",
+    "hash_of", "blake2_256", "twox_64", "keccak_256", "sha2_256", "using",
+}
+READ_ONLY_PREFIXES = ("saturating_", "checked_", "wrapping_", "overflowing_",
+                      "is_", "has_", "can_", "should_", "expect_")
 
 CPI_CALLS = {
     "invoke", "invoke_signed", "invoke_signed_unchecked",
@@ -145,6 +163,7 @@ class _FileParser:
         self.unsupported: list[str] = []
         self.is_test_file = _is_test_path(path)
         self.test_depth = 0
+        self.wirings: list[RuntimeWiring] = []
 
     # -- text helpers ----------------------------------------------------
     def text(self, node) -> str:
@@ -215,7 +234,17 @@ class _FileParser:
         receiver = "::".join(segments[:-1]) or None
 
         kind = I.INTERNAL_CALL
-        if any(hint in callee_text for hint in EXTERNAL_PATH_HINTS):
+        if name in CONVERSION_CALLS or name in READ_ONLY_CALLS \
+                or name.startswith(READ_ONLY_PREFIXES):
+            # `pallet_balances::Call::<T>::transfer_keep_alive { .. }.into()`
+            # BUILDS a dispatchable, it does not execute one. Reading it as a
+            # control transfer makes every call-construction look re-entrant.
+            kind = I.BUILTIN_CALL
+        elif name[:1].isupper():
+            # Rust convention: functions are snake_case, types and enum variants
+            # are CamelCase. `DispatchTime::At(..)` and `Ok(..)` construct data.
+            kind = I.BUILTIN_CALL
+        elif any(hint in callee_text for hint in EXTERNAL_PATH_HINTS):
             kind = I.EXTERNAL_CALL
         elif name in CPI_CALLS and receiver:
             kind = I.EXTERNAL_CALL
@@ -611,9 +640,59 @@ class _FileParser:
                 struct_attributes[name] = attributes
             elif item.type == "impl_item":
                 impls.append((item, attributes))
+            elif item.type == "type_item":
+                self._collect_wiring(item)
+            elif item.type == "macro_invocation":
+                self._collect_runtime_macro(item)
 
         contracts.extend(self.plain_impls(impls, structs, struct_attributes))
         return contracts
+
+    def _collect_wiring(self, item) -> None:
+        """`pub type TxExtension = (A<R>, B<R>, ...)` — an ordered pipeline.
+
+        Every entry runs on every transaction, so this tuple is where two
+        modules that disagree about what is allowed actually meet.
+        """
+        name = self.text(self.field(item, "name") or self.child(item, "type_identifier"))
+        type_node = self.field(item, "type")
+        if not name or type_node is None or type_node.type != "tuple_type":
+            return
+        # Comments are named children of a tuple type. Counting them shifts
+        # every index after the first comment, and the index IS the ordering
+        # claim this record exists to make.
+        members = [
+            re.sub(r"<[^>]*>", "", self.flat(child)).strip()
+            for child in type_node.named_children
+            if child.type not in {"line_comment", "block_comment", "attribute_item"}
+        ]
+        members = [member for member in members
+                   if member and not member.startswith(("//", "/*", "\\"))]
+        if len(members) < 2:
+            return
+        self.wirings.append(RuntimeWiring(
+            name, "extension-pipeline", members, self.path, self.line(item), RUST,
+        ))
+
+    def _collect_runtime_macro(self, item) -> None:
+        """`construct_runtime! { ... }` — the pallet composition and its order."""
+        macro = self.text(self.field(item, "macro") or self.child(item, "identifier"))
+        if macro.split("::")[-1] != "construct_runtime":
+            return
+        body = self.flat(item)
+        members = [
+            match.group(1) for match in
+            re.finditer(r"(?m)^\s*(?:#\[[^\]]*\]\s*)?([A-Z]\w*)\s*:\s*[A-Za-z_]",
+                        self.text(item))
+        ]
+        if not members:
+            members = re.findall(r"\b([A-Z]\w*)\s*:\s*[a-z_]+::", body)
+        if len(members) < 2:
+            return
+        self.wirings.append(RuntimeWiring(
+            "construct_runtime", "runtime-pallets", members, self.path,
+            self.line(item), RUST,
+        ))
 
     def _fields(self, item):
         body = self.field(item, "body")
@@ -850,17 +929,30 @@ def _range_bound(header: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def parse_text(text: str, path: str) -> list[Contract]:
+def parse_text_detailed(text: str, path: str):
+    """Return (contracts, wirings). Runtime wiring is file-level, not per-type."""
     parser, _ = _load()
     if parser is None:
-        return []
+        return [], []
     source = text.encode("utf-8")
     tree = parser.parse(source)
-    return _FileParser(source, str(path)).run(tree.root_node)
+    file_parser = _FileParser(source, str(path))
+    contracts = file_parser.run(tree.root_node)
+    return contracts, file_parser.wirings
+
+
+def parse_text(text: str, path: str) -> list[Contract]:
+    return parse_text_detailed(text, path)[0]
+
+
+def parse_file_detailed(path):
+    return parse_text_detailed(
+        Path(path).read_text(encoding="utf-8", errors="ignore"), str(path)
+    )
 
 
 def parse_file(path) -> list[Contract]:
-    return parse_text(Path(path).read_text(encoding="utf-8", errors="ignore"), str(path))
+    return parse_file_detailed(path)[0]
 
 
 def parse_sources(paths) -> list[Contract]:

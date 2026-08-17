@@ -79,8 +79,14 @@ def parse_project(paths) -> ParseResult:
             ))
             continue
         used.append(f"{language}:{backend}")
+        detailed = getattr(module, "parse_file_detailed", None)
         for path in files:
             try:
+                if detailed is not None:
+                    contracts, wirings = detailed(path)
+                    result.contracts.extend(contracts)
+                    result.wirings.extend(wirings)
+                    continue
                 result.contracts.extend(module.parse_file(path))
             except (OSError, ValueError, RecursionError) as exc:
                 result.diagnostics.append(
