@@ -36,7 +36,9 @@ CAPABILITIES = [
     "unbounded-input-detector", "test-fixture-classification",
     "transaction-decoded-input-taint", "pipeline-guard-bypass-detector",
     "ignored-outcome-detector", "cross-module-composition",
-    "runtime-wiring-extraction", "config-trait-resolution", "pipeline-stage-classification", "boundary-crossing-detection", "workspace-topology",
+    "runtime-wiring-extraction", "config-trait-resolution",
+    "pipeline-stage-classification", "boundary-crossing-detection",
+    "workspace-topology",
     "medusa-backend", "echidna-backend", "halmos-backend",
     "sarif-output", "arcadia-output", "watch-mode", "environment-doctor",
 ]
