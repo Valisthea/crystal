@@ -37,7 +37,10 @@ class EngineCapability:
     invariant_generation: bool
 
 ENGINES = [
-    EngineCapability("Crystal", True, True, True, True, False, True),
+    # Crystal gained concrete fuzzing in V1.00 Build 001: boundary values are
+    # substituted into the symbolic polynomials, and Foundry/Medusa/Echidna/
+    # Halmos run harnesses Crystal generates itself.
+    EngineCapability("Crystal", True, True, True, True, True, True),
     EngineCapability("Slither", True, False, False, False, False, False),
     EngineCapability("Medusa", False, True, True, False, True, True),
     EngineCapability("Echidna", False, True, True, False, True, True),
