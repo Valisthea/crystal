@@ -83,9 +83,10 @@ def parse_project(paths) -> ParseResult:
         for path in files:
             try:
                 if detailed is not None:
-                    contracts, wirings = detailed(path)
+                    contracts, wirings, bindings = detailed(path)
                     result.contracts.extend(contracts)
                     result.wirings.extend(wirings)
+                    result.bindings.extend(bindings)
                     continue
                 result.contracts.extend(module.parse_file(path))
             except (OSError, ValueError, RecursionError) as exc:

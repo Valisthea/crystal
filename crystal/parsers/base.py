@@ -37,11 +37,13 @@ class ParseResult:
     language: str = SOLIDITY
     diagnostics: list[ParseDiagnostic] = field(default_factory=list)
     wirings: list = field(default_factory=list)
+    bindings: list = field(default_factory=list)
 
     def extend(self, other: "ParseResult") -> None:
         self.contracts.extend(other.contracts)
         self.diagnostics.extend(other.diagnostics)
         self.wirings.extend(other.wirings)
+        self.bindings.extend(other.bindings)
 
 
 TEST_PATH_PARTS = {"test", "tests", "mock", "mocks", "testing", "benches",

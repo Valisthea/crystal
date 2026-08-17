@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -167,6 +168,30 @@ class RuntimeWiring:
             if entry == member or entry.rsplit("::", 1)[-1] == member:
                 return position
         return -1
+
+
+@dataclass
+class ConfigBinding:
+    """A runtime binding of a module's associated type to a concrete one.
+
+        impl pallet_transaction_payment::Config for Runtime {
+            type OnChargeTransaction = FungibleAdapter<Balances, ..>;
+        }
+
+    Without this, `T::OnChargeTransaction::withdraw_fee(..)` points nowhere and
+    the debit appears to leave the analysed code.
+    """
+
+    module: str
+    associated_type: str
+    concrete_type: str
+    runtime: str = ""
+    path: str = ""
+    line: int = 0
+
+    @property
+    def concrete_name(self) -> str:
+        return re.sub(r"<.*", "", self.concrete_type).strip().rsplit("::", 1)[-1]
 
 
 @dataclass

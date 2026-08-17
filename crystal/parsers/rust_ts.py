@@ -22,8 +22,8 @@ from functools import lru_cache
 from pathlib import Path
 
 from .. import ir as I
-from ..models import RUST, Contract, ContractError, ContractEvent, ContractType
-from ..models import Function, Parameter, RuntimeWiring, StateVar
+from ..models import RUST, ConfigBinding, Contract, ContractError, ContractEvent
+from ..models import ContractType, Function, Parameter, RuntimeWiring, StateVar
 from .base import ParseResult
 
 PARSER_NAME = "tree-sitter"
@@ -164,6 +164,7 @@ class _FileParser:
         self.is_test_file = _is_test_path(path)
         self.test_depth = 0
         self.wirings: list[RuntimeWiring] = []
+        self.bindings: list[ConfigBinding] = []
 
     # -- text helpers ----------------------------------------------------
     def text(self, node) -> str:
@@ -648,6 +649,28 @@ class _FileParser:
         contracts.extend(self.plain_impls(impls, structs, struct_attributes))
         return contracts
 
+    def _collect_config_bindings(self, body, trait_name: str, target: str) -> None:
+        """`impl pallet_x::Config for Runtime { type Y = Concrete; }`.
+
+        This is the only place the runtime says which concrete type a pallet's
+        `T::Y` actually is, so without it every cross-pallet call through an
+        associated type dead-ends.
+        """
+        if not trait_name or trait_name.rsplit("::", 1)[-1] != "Config":
+            return
+        module = trait_name.rsplit("::", 1)[0] or trait_name
+        for member in body.named_children:
+            if member.type != "type_item":
+                continue
+            name = self.text(self.field(member, "name")
+                             or self.child(member, "type_identifier"))
+            value = self.field(member, "type")
+            if not name or value is None:
+                continue
+            self.bindings.append(ConfigBinding(
+                module, name, self.flat(value), target, self.path, self.line(member),
+            ))
+
     def _collect_wiring(self, item) -> None:
         """`pub type TxExtension = (A<R>, B<R>, ...)` — an ordered pipeline.
 
@@ -857,6 +880,7 @@ class _FileParser:
                 grouped[type_name] = contract
 
             trait_node = self.field(item, "trait")
+            trait_name = ""
             if trait_node is not None:
                 trait_name = re.sub(r"<[^>]*>", "", self.flat(trait_node)).strip()
                 contract.bases.append(trait_name)
@@ -869,6 +893,7 @@ class _FileParser:
             self.state_names = {v.name for v in contract.state_vars}
             body = self.field(item, "body")
             if body is not None:
+                self._collect_config_bindings(body, trait_name, type_name)
                 for member, member_attributes in self.items_with_attributes(body):
                     if member.type != "function_item":
                         continue
@@ -930,15 +955,15 @@ def _range_bound(header: str) -> int | None:
 
 
 def parse_text_detailed(text: str, path: str):
-    """Return (contracts, wirings). Runtime wiring is file-level, not per-type."""
+    """Return (contracts, wirings, bindings) — both are file-level, not per-type."""
     parser, _ = _load()
     if parser is None:
-        return [], []
+        return [], [], []
     source = text.encode("utf-8")
     tree = parser.parse(source)
     file_parser = _FileParser(source, str(path))
     contracts = file_parser.run(tree.root_node)
-    return contracts, file_parser.wirings
+    return contracts, file_parser.wirings, file_parser.bindings
 
 
 def parse_text(text: str, path: str) -> list[Contract]:

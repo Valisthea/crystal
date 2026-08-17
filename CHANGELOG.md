@@ -1,5 +1,46 @@
 # Changelog
 
+## Crystal V1.00 Build 004 — where the debit actually happens
+
+Build 003 shipped cross-module composition and named its own limit: Config-trait
+associated types were unresolved, so `T::OnChargeTransaction::withdraw_fee(..)`
+pointed nowhere and the debit appeared to leave the analysed code. That limit is
+now closed.
+
+A Substrate pallet declares `type OnChargeTransaction` and the runtime binds it,
+in a different crate:
+
+    impl pallet_transaction_payment::Config for Runtime {
+        type OnChargeTransaction =
+            FungibleAdapter<Balances, pallet_mining_rewards::TransactionFeesCollector<Runtime>>;
+    }
+
+That `impl ..::Config for Runtime` block is the only place the binding exists.
+Crystal now extracts every associated type from it (248 bindings on the Quantus
+runtime) and resolves `T::X` at the call site, which turns three dead-end calls
+into a routed debit path:
+
+    ChargeTransactionPayment -> FungibleAdapter   OnChargeTransaction::withdraw_fee
+    ChargeTransactionPayment -> FungibleAdapter   OnChargeTransaction::can_withdraw_fee
+    ChargeTransactionPayment -> FungibleAdapter   OnChargeTransaction::correct_and_deposit_fee
+
+A pipeline stage now **inherits what its bound implementation does**. If
+`FungibleAdapter` had consulted the high-security whitelist, the bypass signal
+would clear; it does not, so Signal 2 gains that as evidence and rises 0.72 to
+0.78. Routes that land on unparsed code are dropped rather than reported: an
+unresolved target says nothing about what the operation does.
+
+**Structural fix: a shared vocabulary module.** `semantics.modules` imported
+`detectors.base`, and `detectors/__init__` imports `pipeline_bypass`, which
+imports `semantics.modules` — a cycle that only stayed hidden because the test
+suite happened to import the detectors package first. `crystal/vocabulary.py`
+now holds the security vocabulary both layers need and imports nothing from
+Crystal. It also stops the two layers from drifting into disagreeing about what
+counts as a guard.
+
+Tests: 166 passing (+5 for binding extraction, resolution, routed edges, and the
+unresolved case).
+
 ## Crystal V1.00 Build 003 — neither module is wrong on its own
 
 Build 002 closed Signal 1 of the F5 benchmark and explicitly did not claim

@@ -12,31 +12,21 @@ from dataclasses import dataclass
 
 from ..ir import EXTERNAL_CALL_KINDS, IRStmt
 from ..quality.normalize import stable_id
+from ..vocabulary import (
+    AUTH_HELPERS,
+    PRIVILEGED_NAME_HINTS,
+    REENTRANCY_GUARDS,
+    SENDER_TOKENS,
+)
 
 STATUS = "RESEARCH"
 
-AUTH_HELPERS = {
-    "_checkowner", "_checkrole", "checkrole", "onlyowner", "_onlyowner",
-    "ensure_signed", "ensure_root", "ensure_signed_or_root", "require_auth",
-    "only_owner", "_authorizeupgrade", "_requireauth", "hasrole",
-    "_checkauthorized", "assert_owner", "authorize",
-}
-
-SENDER_TOKENS = ("msg.sender", "_msgsender", "msgsender", "self.sender",
-                 "ctx.accounts", "signer", "origin", "caller")
-
-PRIVILEGED_NAME_HINTS = (
-    "owner", "admin", "implementation", "pause", "paused", "guardian",
-    "authority", "treasury", "minter", "operator", "role", "whitelist",
-    "blacklist", "oracle", "feerate", "fee", "rate", "cap", "limit",
-    "beneficiary", "governance", "governor", "controller", "manager",
-    "router", "vault", "keeper", "signer", "threshold", "delay",
-)
-
-REENTRANCY_GUARDS = (
-    "nonreentrant", "noreentrancy", "reentrancyguard", "lock", "locked",
-    "mutex", "nonreentrantbefore",
-)
+__all__ = [
+    "AUTH_HELPERS", "PRIVILEGED_NAME_HINTS", "REENTRANCY_GUARDS",
+    "SENDER_TOKENS", "STATUS", "DetectorSignal", "entry_points",
+    "external_call_statements", "guards", "has_modifier", "has_sender_guard",
+    "privileged_variables", "signal",
+]
 
 
 @dataclass(frozen=True)

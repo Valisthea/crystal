@@ -15,22 +15,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ..detectors.base import AUTH_HELPERS
 from ..ir import EXTERNAL_CALL_KINDS
-
-# Storage and helpers whose purpose is to restrict who or what may proceed.
-GUARD_NAME_HINTS = (
-    "highsecurity", "high_security", "whitelist", "allowlist", "blocklist",
-    "blacklist", "denylist", "frozen", "freeze", "paused", "pause", "blocked",
-    "restricted", "reversible", "guardian", "locked", "banned", "sanction",
-    "permission", "authorized", "authorised", "approved", "eligib",
-)
-GUARD_CALL_HINTS = (
-    "is_allowed", "is_call_allowed", "is_high_security", "is_whitelisted",
-    "is_frozen", "is_paused", "is_blocked", "is_authorized", "is_authorised",
-    "can_transfer", "ensure_allowed", "check_allowed", "is_permitted",
-    "is_restricted", "is_reversible",
-)
+from ..vocabulary import AUTH_HELPERS, GUARD_CALL_HINTS, GUARD_NAME_HINTS
 
 # Operations that move value. Matched on whole name segments: `count_transfers`
 # contains "transfer" and moves nothing, and reading it as a value operation is
@@ -68,6 +54,9 @@ class StageRole:
     guard_evidence: list[str] = field(default_factory=list)
     value_evidence: list[str] = field(default_factory=list)
     consulted_guards: list[str] = field(default_factory=list)
+    # Concrete types this stage reaches through runtime-bound associated types.
+    routed_to: list[str] = field(default_factory=list)
+    routes: list[str] = field(default_factory=list)
     path: str = ""
     line: int = 0
 
@@ -103,13 +92,43 @@ class ModuleGraph:
     pipelines: list[Pipeline] = field(default_factory=list)
     edges: list[ModuleEdge] = field(default_factory=list)
     modules: dict[str, str] = field(default_factory=dict)
+    # `OnChargeTransaction` -> `FungibleAdapter`, as bound by the runtime.
+    associated_types: dict[str, str] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.pipelines or self.edges)
 
+    def resolve(self, reference: str) -> str:
+        """`<T as Config>::OnChargeTransaction` -> `FungibleAdapter`."""
+        for segment in reversed(re.split(r"::|\.|<|>|\s", reference or "")):
+            segment = segment.strip()
+            if segment in self.associated_types:
+                return self.associated_types[segment]
+        return ""
+
+
+ASSOCIATED_REF_RE = re.compile(r"\bT\s*::\s*(\w+)|<\s*T\s+as\s+[\w:]+\s*>\s*::\s*(\w+)")
+
+
+def resolve_associated_types(bindings) -> dict[str, str]:
+    """Map each associated type to the concrete type the runtime bound to it."""
+    resolved: dict[str, str] = {}
+    for binding in bindings or ():
+        name = binding.concrete_name
+        if name and binding.associated_type not in resolved:
+            resolved[binding.associated_type] = name
+    return resolved
+
 
 def _short(name: str) -> str:
     return re.sub(r"<[^>]*>", "", name or "").strip().rsplit("::", 1)[-1]
+
+
+def _associated_name(reference: str) -> str:
+    """`<<T as Config>::OnChargeTransaction as OnChargeTransaction<T>>` -> the name."""
+    match = ASSOCIATED_REF_RE.search(reference or "")
+    name = (match.group(1) or match.group(2)) if match else _short(reference)
+    return re.split(r"\s+as\s+", name or "")[0].strip().strip("<>").strip()
 
 
 def _guard_signals(contract) -> tuple[list[str], list[str]]:
@@ -155,6 +174,28 @@ def _rejects_nearby(function, statement) -> bool:
     return False
 
 
+def _routed_targets(contract, graph, by_name) -> tuple[list[str], list[str]]:
+    """Concrete types this contract reaches through runtime-bound `T::X` paths."""
+    routes: list[str] = []
+    targets: list[str] = []
+    for function in contract.functions:
+        if function.ir is None:
+            continue
+        for call in function.ir.calls():
+            resolved = graph.resolve(call.receiver or "")
+            # Only routes that land on parsed code are reported: an unresolved
+            # target says nothing about what the operation does.
+            if not resolved or resolved == contract.name or resolved not in by_name:
+                continue
+            label = (f"{_associated_name(call.receiver or '')}::{call.callee}"
+                     f" -> {resolved}")
+            if label not in routes:
+                routes.append(label)
+            if resolved not in targets:
+                targets.append(resolved)
+    return routes, targets
+
+
 def _value_signals(contract) -> list[str]:
     evidence: list[str] = []
     for function in contract.functions:
@@ -178,12 +219,13 @@ def _value_signals(contract) -> list[str]:
     return evidence
 
 
-def build_module_graph(contracts, wirings=()) -> ModuleGraph:
+def build_module_graph(contracts, wirings=(), bindings=()) -> ModuleGraph:
     graph = ModuleGraph()
     by_name = {contract.name: contract for contract in contracts}
     graph.modules = {
         contract.name: contract.module or contract.path for contract in contracts
     }
+    graph.associated_types = resolve_associated_types(bindings)
 
     for wiring in wirings or ():
         pipeline = Pipeline(wiring.name, wiring.kind, wiring.path, wiring.line)
@@ -195,10 +237,24 @@ def build_module_graph(contracts, wirings=()) -> ModuleGraph:
                 stage.path = contract.path
                 stage.line = contract.line
                 guard_evidence, consulted = _guard_signals(contract)
+                stage.value_evidence = _value_signals(contract)
+                stage.routes, stage.routed_to = _routed_targets(
+                    contract, graph, by_name
+                )
+                # A stage that hands the operation to a runtime-bound
+                # implementation inherits what that implementation does: the
+                # debit really happens there, and so would the missing check.
+                for target in stage.routed_to:
+                    routed_contract = by_name.get(target)
+                    if routed_contract is None:
+                        continue
+                    routed_guards, routed_consulted = _guard_signals(routed_contract)
+                    guard_evidence = guard_evidence + routed_guards
+                    consulted = sorted(set(consulted) | set(routed_consulted))
+                    stage.value_evidence.extend(_value_signals(routed_contract))
                 stage.guard_evidence = guard_evidence
                 stage.consulted_guards = consulted
                 stage.is_guard = bool(guard_evidence)
-                stage.value_evidence = _value_signals(contract)
                 stage.moves_value = bool(stage.value_evidence)
             pipeline.stages.append(stage)
         graph.pipelines.append(pipeline)
@@ -216,10 +272,20 @@ def build_module_graph(contracts, wirings=()) -> ModuleGraph:
             if function.ir is None:
                 continue
             for call in function.ir.calls():
-                target = _short(call.receiver or "")
+                receiver = call.receiver or ""
+                target = _short(receiver)
                 if target and target in by_name and target != contract.name:
                     graph.edges.append(ModuleEdge(
                         contract.name, target, "calls", call.callee, 0.7,
+                    ))
+                    continue
+                # `<T as Config>::OnChargeTransaction::withdraw_fee(..)` only
+                # points somewhere once the runtime binding is known.
+                routed = graph.resolve(receiver)
+                if routed and routed != contract.name:
+                    graph.edges.append(ModuleEdge(
+                        contract.name, routed, "config-routed",
+                        f"{_associated_name(receiver)}::{call.callee}", 0.85,
                     ))
 
     seen = set()

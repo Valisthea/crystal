@@ -48,7 +48,8 @@ def _is_test_function(contracts, item) -> bool:
 
 
 def run_detectors(contracts, engine=None, selected=None,
-                  include_tests: bool = False, wirings=()) -> list[DetectorSignal]:
+                  include_tests: bool = False, wirings=(),
+                  bindings=()) -> list[DetectorSignal]:
     """Run the selected detectors over production code.
 
     Test fixtures are excluded by default. A mock runtime or an `ExtBuilder`
@@ -66,10 +67,13 @@ def run_detectors(contracts, engine=None, selected=None,
             continue
         # Composition detectors need the runtime wiring; the rest do not, and
         # declaring the parameter is how a detector opts in.
-        if "wirings" in inspect.signature(module.detect).parameters:
-            signals.extend(module.detect(targets, engine, wirings=wirings))
-        else:
-            signals.extend(module.detect(targets, engine))
+        parameters = inspect.signature(module.detect).parameters
+        extra = {}
+        if "wirings" in parameters:
+            extra["wirings"] = wirings
+        if "bindings" in parameters:
+            extra["bindings"] = bindings
+        signals.extend(module.detect(targets, engine, **extra))
     if not include_tests:
         signals = [
             item for item in signals

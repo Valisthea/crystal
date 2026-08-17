@@ -45,8 +45,8 @@ class _Anchor:
         self.is_entry_point = True
 
 
-def detect(contracts, engine=None, wirings=()) -> list[DetectorSignal]:
-    graph = build_module_graph(contracts, wirings)
+def detect(contracts, engine=None, wirings=(), bindings=()) -> list[DetectorSignal]:
+    graph = build_module_graph(contracts, wirings, bindings)
     out: list[DetectorSignal] = []
 
     for pipeline in graph.pipelines:
@@ -77,6 +77,13 @@ def detect(contracts, engine=None, wirings=()) -> list[DetectorSignal]:
                 f"`{mover.name}` consults none of the checks "
                 f"`{guard.name}` enforces ({', '.join(guard.consulted_guards) or 'n/a'})",
             ]
+            if mover.routes:
+                confidence += 0.06
+                evidence.append(
+                    "the debit is performed by the runtime-bound implementation: "
+                    + "; ".join(mover.routes[:4])
+                    + " — and it does not consult the check either"
+                )
             if mover.index > guard.index:
                 confidence += 0.10
                 evidence.append(

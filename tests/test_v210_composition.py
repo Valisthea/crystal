@@ -85,24 +85,27 @@ REFUNDING_PAYMENT = PAYMENT_EXTENSION.replace(
 
 
 def parse_all(*sources):
-    contracts = []
-    wirings = []
+    contracts, wirings, bindings = [], [], []
     for index, source in enumerate(sources):
-        found, found_wirings = rust_ts.parse_text_detailed(source, f"m{index}.rs")
+        found, found_wirings, found_bindings = rust_ts.parse_text_detailed(
+            source, f"m{index}.rs"
+        )
         contracts.extend(found)
         wirings.extend(found_wirings)
-    return contracts, wirings
+        bindings.extend(found_bindings)
+    return contracts, wirings, bindings
 
 
 def signals(*sources):
-    contracts, wirings = parse_all(*sources)
-    return run_detectors(contracts, SymbolicEngine(contracts), wirings=wirings)
+    contracts, wirings, bindings = parse_all(*sources)
+    return run_detectors(contracts, SymbolicEngine(contracts),
+                         wirings=wirings, bindings=bindings)
 
 
 # -- pipeline extraction -----------------------------------------------------
 
 def test_pipeline_members_and_order_are_extracted():
-    _, wirings = parse_all(RUNTIME)
+    _, wirings, _ = parse_all(RUNTIME)
     pipeline = next(w for w in wirings if w.name == "TxExtension")
     assert pipeline.kind == "extension-pipeline"
     assert pipeline.index_of("ReversibleTransactionExtension") == 7
@@ -111,7 +114,7 @@ def test_pipeline_members_and_order_are_extracted():
 
 def test_comments_do_not_shift_pipeline_indices():
     """A comment between entries must not be counted as a stage."""
-    _, wirings = parse_all(RUNTIME)
+    _, wirings, _ = parse_all(RUNTIME)
     members = next(w for w in wirings if w.name == "TxExtension").members
     assert not any(m.startswith("//") for m in members)
     assert len(members) == 11
@@ -120,8 +123,8 @@ def test_comments_do_not_shift_pipeline_indices():
 # -- module graph ------------------------------------------------------------
 
 def test_module_graph_classifies_guard_and_mover():
-    contracts, wirings = parse_all(RUNTIME, GUARD_EXTENSION, PAYMENT_EXTENSION)
-    graph = build_module_graph(contracts, wirings)
+    contracts, wirings, bindings = parse_all(RUNTIME, GUARD_EXTENSION, PAYMENT_EXTENSION)
+    graph = build_module_graph(contracts, wirings, bindings)
     pipeline = graph.pipelines[0]
     guard = next(s for s in pipeline.stages
                  if s.name == "ReversibleTransactionExtension")
@@ -134,8 +137,8 @@ def test_module_graph_classifies_guard_and_mover():
 
 
 def test_unresolved_stages_are_marked_not_guessed():
-    contracts, wirings = parse_all(RUNTIME)
-    graph = build_module_graph(contracts, wirings)
+    contracts, wirings, bindings = parse_all(RUNTIME)
+    graph = build_module_graph(contracts, wirings, bindings)
     pipeline = graph.pipelines[0]
     assert pipeline.stages
     assert all(not stage.resolved for stage in pipeline.stages)
@@ -203,6 +206,72 @@ def test_function_without_an_outcome_parameter_is_not_flagged():
     """
     found = [s for s in signals(source) if s.detector == OUTCOME_DETECTOR]
     assert not found, "a frame never handed the outcome is not ignoring it"
+
+
+RUNTIME_CONFIG = """
+impl pallet_transaction_payment::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type OnChargeTransaction =
+        FungibleAdapter<Balances, pallet_mining_rewards::TransactionFeesCollector<Runtime>>;
+    type WeightToFee = IdentityFee<Balance>;
+}
+"""
+
+FUNGIBLE_ADAPTER = """
+pub struct FungibleAdapter<F, OU>(PhantomData<(F, OU)>);
+
+impl<F, OU> OnChargeTransaction for FungibleAdapter<F, OU> {
+    fn withdraw_fee(who: &AccountId, fee: Balance, tip: Balance) -> Result<(), E> {
+        F::withdraw(who, fee)
+    }
+}
+"""
+
+
+def test_config_bindings_are_extracted():
+    _, _, bindings = parse_all(RUNTIME_CONFIG)
+    binding = next(b for b in bindings if b.associated_type == "OnChargeTransaction")
+    assert binding.module == "pallet_transaction_payment"
+    assert binding.runtime == "Runtime"
+    assert binding.concrete_name == "FungibleAdapter"
+
+
+def test_associated_type_resolves_to_the_concrete_implementation():
+    contracts, wirings, bindings = parse_all(
+        RUNTIME, RUNTIME_CONFIG, GUARD_EXTENSION, PAYMENT_EXTENSION, FUNGIBLE_ADAPTER
+    )
+    graph = build_module_graph(contracts, wirings, bindings)
+    assert graph.associated_types["OnChargeTransaction"] == "FungibleAdapter"
+    assert graph.resolve("<T as Config>::OnChargeTransaction") == "FungibleAdapter"
+
+
+def test_config_routed_edge_reaches_the_implementation():
+    contracts, wirings, bindings = parse_all(
+        RUNTIME, RUNTIME_CONFIG, GUARD_EXTENSION, PAYMENT_EXTENSION, FUNGIBLE_ADAPTER
+    )
+    graph = build_module_graph(contracts, wirings, bindings)
+    routed = [e for e in graph.edges if e.kind == "config-routed"]
+    assert any(e.source == "ChargeTransactionPayment" and e.target == "FungibleAdapter"
+               for e in routed), routed
+
+
+def test_bypass_signal_names_the_routed_implementation():
+    found = [s for s in signals(RUNTIME, RUNTIME_CONFIG, GUARD_EXTENSION,
+                                PAYMENT_EXTENSION, FUNGIBLE_ADAPTER)
+             if s.detector == PIPELINE_DETECTOR]
+    assert found
+    best = max(found, key=lambda s: s.confidence)
+    joined = " ".join(best.evidence)
+    assert "FungibleAdapter" in joined
+    assert "runtime-bound implementation" in joined
+
+
+def test_unresolvable_route_is_not_reported():
+    """Without the runtime binding, the debit path stays honestly unknown."""
+    contracts, wirings, bindings = parse_all(RUNTIME, PAYMENT_EXTENSION)
+    graph = build_module_graph(contracts, wirings, bindings)
+    assert not graph.associated_types
+    assert not [e for e in graph.edges if e.kind == "config-routed"]
 
 
 def test_signals_stay_research_only():
