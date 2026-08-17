@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crystal-security-engine"
+dynamic = ["version"]
+description = "Protocol-oriented smart-contract security research engine (evidence-only)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Kairos Lab" }]
+keywords = [
+    "security", "smart-contracts", "solidity", "rust", "substrate", "move",
+    "vyper", "static-analysis", "symbolic-execution", "audit", "bug-bounty",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
+# Crystal's core is dependency-free on purpose: it must run anywhere Python
+# runs. tree-sitter is optional and only upgrades parsing fidelity.
+dependencies = []
+
+[project.optional-dependencies]
+treesitter = [
+    "tree-sitter>=0.21",
+    "tree-sitter-solidity>=1.2",
+    "tree-sitter-rust>=0.21",
+]
+solc = ["solc-select>=1.0"]
+dev = [
+    "pytest>=8.0",
+    "tree-sitter>=0.21",
+    "tree-sitter-solidity>=1.2",
+    "tree-sitter-rust>=0.21",
+]
+all = [
+    "tree-sitter>=0.21",
+    "tree-sitter-solidity>=1.2",
+    "tree-sitter-rust>=0.21",
+    "solc-select>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Valisthea/crystal"
+Repository = "https://github.com/Valisthea/crystal"
+Issues = "https://github.com/Valisthea/crystal/issues"
+
+[project.scripts]
+crystal = "crystal.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "crystal.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["crystal*"]
+
+[tool.setuptools.package-data]
+crystal = ["corpus/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "description": "Reference corpus of known behaviour shapes. Used as a novelty baseline: a sequence that matches a known shape is not novel, it is expected. Matching is structural (delta shapes, ordering, detector signals), never on function names alone.",
+  "delta_shapes": [
+    {
+      "id": "conservation-inverse-pair",
+      "kind": "known-behavior",
+      "similarity": 0.82,
+      "match": {"relation": "symbolic-inverse"},
+      "description": "Two operations whose normalized state deltas cancel exactly (deposit/withdraw, mint/burn, borrow/repay)."
+    },
+    {
+      "id": "partial-conservation",
+      "kind": "known-behavior",
+      "similarity": 0.58,
+      "match": {"relation": "partial-inverse"},
+      "description": "Deltas cancel on some but not all shared accounting variables."
+    },
+    {
+      "id": "symmetric-asset-share-mint",
+      "kind": "known-behavior",
+      "similarity": 0.74,
+      "match": {"paired_shapes": ["+*", "+*"]},
+      "description": "Assets and shares move together by the same amount: the ordinary 1:1 vault path."
+    },
+    {
+      "id": "internal-transfer-conservation",
+      "kind": "known-behavior",
+      "similarity": 0.78,
+      "match": {"all_zero_with_touch": true},
+      "description": "Balances are debited and credited within the same variable, netting to zero."
+    },
+    {
+      "id": "monotonic-counter",
+      "kind": "known-behavior",
+      "similarity": 0.70,
+      "match": {"constant_increment": true},
+      "description": "A nonce or counter incremented by a constant."
+    }
+  ],
+  "weaknesses": [
+    {
+      "id": "reentrancy-external-call-before-state-write",
+      "detector": "reentrancy-ordering",
+      "similarity": 0.86,
+      "references": ["SWC-107", "CWE-841"],
+      "description": "Control leaves the contract before the state update that the guard depends on."
+    },
+    {
+      "id": "missing-authority-on-privileged-write",
+      "detector": "missing-access-control",
+      "similarity": 0.84,
+      "references": ["SWC-105", "SWC-106", "CWE-284"],
+      "description": "An unguarded entry point writes authority-bearing state."
+    },
+    {
+      "id": "first-depositor-share-inflation",
+      "detector": "first-depositor-inflation",
+      "similarity": 0.80,
+      "references": ["ERC-4626 inflation attack", "CWE-682"],
+      "description": "Share conversion divides by a supply an early depositor can skew."
+    },
+    {
+      "id": "spot-price-manipulation",
+      "detector": "oracle-manipulation-surface",
+      "similarity": 0.78,
+      "references": ["SWC-114", "CWE-345"],
+      "description": "Accounting consumes a spot price that is movable inside one transaction."
+    },
+    {
+      "id": "fee-on-transfer-accounting-mismatch",
+      "detector": null,
+      "similarity": 0.62,
+      "references": ["CWE-682"],
+      "match": {"asset_only_mutation": true},
+      "description": "Recorded amount and received amount can diverge when the asset takes a fee on transfer."
+    }
+  ]
+}

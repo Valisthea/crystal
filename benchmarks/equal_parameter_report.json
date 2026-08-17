@@ -1,0 +1,86 @@
+{
+  "parameters": {
+    "same_corpus": true,
+    "static_only": true,
+    "manual_hints": false,
+    "internet": false,
+    "deterministic": true,
+    "max_sequence_depth": 3
+  },
+  "engines": {
+    "Crystal": {
+      "patterns": true,
+      "sequence_reasoning": true,
+      "state_delta": true,
+      "unknown_behavior": true,
+      "fuzzing": false,
+      "invariant_generation": true
+    },
+    "Slither": {
+      "patterns": true,
+      "sequence_reasoning": false,
+      "state_delta": false,
+      "unknown_behavior": false,
+      "fuzzing": false,
+      "invariant_generation": false
+    },
+    "Medusa": {
+      "patterns": false,
+      "sequence_reasoning": true,
+      "state_delta": true,
+      "unknown_behavior": false,
+      "fuzzing": true,
+      "invariant_generation": true
+    },
+    "Echidna": {
+      "patterns": false,
+      "sequence_reasoning": true,
+      "state_delta": true,
+      "unknown_behavior": false,
+      "fuzzing": true,
+      "invariant_generation": true
+    }
+  },
+  "crystal_run": {
+    "sequence_cap": 3,
+    "static_only": true,
+    "novel_behaviors": 12,
+    "unknown_behavior_candidates": 4,
+    "delta_anomalies": 10,
+    "confirmed_findings": 0,
+    "top_unknown": [
+      {
+        "seq": [
+          "Target.deposit",
+          "Target.donate"
+        ],
+        "novelty": 0.604,
+        "priority": "MEDIUM"
+      },
+      {
+        "seq": [
+          "Target.donate",
+          "Target.deposit"
+        ],
+        "novelty": 0.604,
+        "priority": "MEDIUM"
+      },
+      {
+        "seq": [
+          "Target.donate",
+          "Target.withdraw"
+        ],
+        "novelty": 0.604,
+        "priority": "MEDIUM"
+      },
+      {
+        "seq": [
+          "Target.withdraw",
+          "Target.donate"
+        ],
+        "novelty": 0.604,
+        "priority": "MEDIUM"
+      }
+    ]
+  }
+}

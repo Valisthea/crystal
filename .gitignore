@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Crystal output
+crystal-report.json
+crystal-report.md
+crystal-report.sarif
+crystal-arcadia.json
+/artifacts/
+# Fuzzer corpora dropped by Medusa/Echidna at the repo root — not the
+# reference corpus shipped in crystal/corpus/.
+/corpus/
+
+# Foundry / Solidity toolchains pulled into a target
+/out/
+/cache/
+/broadcast/
+node_modules/
+/target/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

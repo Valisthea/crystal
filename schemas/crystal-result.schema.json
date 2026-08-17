@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Valisthea/crystal/schemas/crystal-result.schema.json",
+  "title": "Crystal scan result",
+  "description": "Output of `crystal scan --format json`. Crystal is evidence-only: confirmed_findings is always 0 and no severity or submission decision is expressed.",
+  "type": "object",
+  "required": [
+    "tool", "version", "status", "project", "summary", "finding_gate",
+    "evidence_records", "output_contract", "state_deltas", "delta_anomalies",
+    "composition_candidates", "novel_behaviors", "unknown_behavior_candidates",
+    "constraints", "concrete_validation", "foundry_validation"
+  ],
+  "properties": {
+    "tool": { "const": "crystal" },
+    "version": { "type": "string" },
+    "build": { "type": "string" },
+    "status": { "type": "string" },
+    "project": { "type": "string" },
+
+    "summary": {
+      "type": "object",
+      "required": ["contracts", "sources", "confirmed_findings", "output_role"],
+      "properties": {
+        "sources": { "type": "integer", "minimum": 0 },
+        "contracts": { "type": "integer", "minimum": 0 },
+        "confirmed_findings": {
+          "const": 0,
+          "description": "Structurally always zero: two proof gates are never machine-set."
+        },
+        "output_role": { "const": "evidence-only" },
+        "detector_signals": { "type": "integer", "minimum": 0 },
+        "state_deltas": { "type": "integer", "minimum": 0 },
+        "delta_anomalies": { "type": "integer", "minimum": 0 },
+        "languages": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "frameworks": { "type": "array", "items": { "type": "string" } },
+        "parser_backends": { "type": "string" },
+        "quality_passed": { "type": ["boolean", "null"] }
+      }
+    },
+
+    "output_contract": {
+      "type": "object",
+      "required": ["role", "final_finding_decision", "severity_decision", "submission_decision"],
+      "properties": {
+        "role": { "const": "evidence-only" },
+        "final_finding_decision": { "const": false },
+        "severity_decision": { "const": false },
+        "submission_decision": { "const": false }
+      }
+    },
+
+    "finding_gate": {
+      "type": "object",
+      "required": ["policy", "anti_finding_checks", "decisions"],
+      "properties": {
+        "policy": { "const": "zero-false-positive-confirmed" },
+        "anti_finding_checks": {
+          "type": "array", "minItems": 5, "items": { "type": "string" }
+        },
+        "decisions": { "type": "array" },
+        "concrete_validation_is_not_confirmation": { "const": true },
+        "report": {
+          "type": "object",
+          "properties": {
+            "assessments": { "type": "array" },
+            "poc_requests": { "type": "array" },
+            "human_only_gates": {
+              "type": "array",
+              "items": { "enum": ["economic_impact", "minimal_trace"] }
+            }
+          }
+        }
+      }
+    },
+
+    "detectors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "detector", "title", "contract", "function", "path",
+                     "line", "confidence", "status", "falsification"],
+        "properties": {
+          "status": { "const": "RESEARCH" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "line": { "type": "integer", "minimum": 0 },
+          "validation_required": { "const": true },
+          "ordered_trace": { "type": "array", "items": { "type": "string" } },
+          "falsification": {
+            "type": "array", "minItems": 1, "items": { "type": "string" }
+          },
+          "references": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "state_deltas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sequence", "before", "after", "delta", "touched",
+                     "changed", "confidence"],
+        "properties": {
+          "sequence": { "type": "array", "items": { "type": "string" } },
+          "delta": { "type": "object", "additionalProperties": { "type": "string" } },
+          "model": { "enum": ["symbolic-ast", "regex-fallback", "symbolic-expression"] },
+          "unsupported": {
+            "type": "array", "items": { "type": "string" },
+            "description": "Effects the model refused to approximate."
+          },
+          "branch_dependent": { "type": "boolean" },
+          "guards": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "delta_anomalies": { "type": "array" },
+    "composition_candidates": { "type": "array" },
+    "differential_candidates": { "type": "array" },
+    "novel_behaviors": { "type": "array" },
+    "unknown_behavior_candidates": { "type": "array" },
+    "research_candidates": { "type": "array" },
+    "invariant_candidates": { "type": "array" },
+    "protocol_invariants": { "type": "array" },
+    "constraints": { "type": "array" },
+
+    "concrete_validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "enum": ["COUNTEREXAMPLE", "NO_COUNTEREXAMPLE", "UNSUPPORTED"]
+          },
+          "assumptions": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "foundry_validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "enum": ["EXECUTED_PASS", "EXECUTED_REVERT", "UNSUPPORTED",
+                     "UNAVAILABLE", "TIMEOUT", "HARNESS_ONLY"]
+          },
+          "unsupported_reason": { "type": ["string", "null"] },
+          "harness": { "type": ["string", "null"] }
+        }
+      }
+    },
+
+    "foundry_capabilities": { "type": ["object", "null"] },
+
+    "evidence_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["schema_version", "tool", "status", "provenance", "limitations"],
+        "properties": {
+          "tool": { "const": "crystal" },
+          "status": {
+            "enum": ["RESEARCH", "VALIDATION", "EVIDENCE", "UNSUPPORTED"]
+          },
+          "provenance": { "type": "object" }
+        },
+        "not": {
+          "anyOf": [
+            { "required": ["severity"] },
+            { "required": ["submission"] }
+          ]
+        }
+      }
+    },
+
+    "contracts": { "type": "array" },
+    "parsers": { "type": "object" },
+    "parse_diagnostics": { "type": "array" },
+    "project_profile": { "type": ["object", "null"] },
+    "quality_report": { "type": ["object", "null"] }
+  }
+}
