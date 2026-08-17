@@ -1,5 +1,76 @@
 # Changelog
 
+## Crystal V1.00 Build 006 — Crystal becomes Arcadia's microscope
+
+Build 005 gave Crystal a composition engine and eight structural detectors. This
+build transforms Crystal from a detection/analysis engine into a **structural
+research engine** oriented around state transitions, campaign-scoped analysis,
+and evidence generation for Arcadia.
+
+**Campaign system.** Crystal now runs scoped, gated analyses instead of "scan
+everything". A campaign defines what to look at (scope), what transitions are
+dangerous (transitions), what should hold (invariants), and what to ask
+(questions). Everything outside the campaign is deferred, not analysed. The
+architecture enforces: SCOPE → CAMPAIGN → TARGET → STATE TRANSITIONS → TOP
+CANDIDATES → VALIDATION → ARCADIA.
+
+**Protocol invariant packs.** Six built-in packs (generic, defi, registry,
+authorization, migration, economic) provide 15 campaign definitions covering
+ownership transitions, role revocation, nonce replay, temporal boundaries,
+balance accounting, oracle settlement, share inflation, permit funding, resolver
+transitions, approval authority, stale authorization, revocation, permission
+preservation, quote settlement, and allowance mismatch. Packs are loaded via
+`importlib` — true plugins, not hardcoded.
+
+**ENS preset.** Seven campaigns (A1–A3, B1–B4) covering the ENS competition
+surface: migration × fuse × roles, transfer × resolver × roles, HCA × session ×
+nonce, registration × payment × oracle, commit × reveal × price, permit ×
+funding × settlement, expiry × premium. The campaigns use generic concepts
+(owner, resolver, nonce, expiry) — they do not hardcode ENS contract names.
+
+**Enriched causal state graph.** Edges now carry `edge_kind` (ownership-action,
+role-action, nonce-auth, temporal-action, balance-transfer, etc.), semantic
+`categories`, source/target contract paths and lines, `key_relation`, and
+`condition`. State nodes have semantic category classification (ownership, role,
+nonce, temporal, balance, registry, proxy, storage). The graph drives
+campaign-aware sequence scoring.
+
+**Order-sensitivity engine.** Detects when function ordering changes the final
+security state. Tests permutations of sequences sharing causal state, producing
+`OrderSensitiveResult` with the two sequences, differing state, affected
+storage, confidence, and replay instructions.
+
+**Boundary engine.** Auto-proposes x−1, x, x+1 test cases for numeric and
+temporal comparisons found in the source. Useful for detecting off-by-one errors
+at expiry boundaries and premium calculations.
+
+**Asymmetric side-effect detector (8th detector).** Finds value operations where
+companion side-effects are missing in some code paths — the F3 benchmark
+pattern. Fires when a value operation (deposit, mint, transfer, slash, etc.) has
+a companion function present in ≥2 call sites but absent in at least one.
+
+**Top-K multi-factor scoring.** Candidates are scored by novelty (0.20) ×
+state_delta_significance (0.25) × causal_depth (0.15) ×
+authorization_relevance (0.15) × order_sensitivity (0.10) ×
+exploitability (0.15), with penalties for duplicate, known, and low-confidence
+candidates. Global top-K across campaigns with deduplication by invariant +
+delta shape.
+
+**CLI additions.** `crystal campaign list` shows registered packs and campaigns.
+`crystal campaign run <id> <target>` runs a single campaign against a project
+and prints candidates with scores, hypotheses, and evidence.
+
+**Arcadia output enriched.** The `crystal-arcadia/2.0` hand-off now includes a
+`campaigns` field carrying per-campaign results with candidates, scores,
+evidence, and state deltas.
+
+**Not changed.** The seven existing detectors, symbolic engine, composition
+system, parsers, and backends are untouched. The v1 JSON contract is preserved.
+Crystal still never produces a confirmed finding.
+
+Tests: 208 passing (+20 covering campaigns, packs, scoring, boundary engine,
+order sensitivity, CLI parsing, and report enrichment).
+
 ## Crystal V1.00 Build 005 — CheckNonce rejects all day and guards nothing
 
 Composition landed in Build 003 and worked on the F5 shape. This build makes it

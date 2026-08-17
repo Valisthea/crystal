@@ -62,6 +62,22 @@ def _contract_summaries(result):
     return summaries
 
 
+def _campaign_payload(result) -> list[dict]:
+    campaign_results = result.get("campaign_results", [])
+    out = []
+    for cr in campaign_results:
+        out.append({
+            "campaign_id": cr.campaign_id,
+            "campaign_name": cr.campaign_name,
+            "candidates": [asdict(c) for c in cr.candidates],
+            "deferred": cr.deferred,
+            "total_sequences_explored": cr.total_sequences_explored,
+            "total_sequences_pruned": cr.total_sequences_pruned,
+            "warning": cr.warning,
+        })
+    return out
+
+
 def _composition_payload(model) -> dict:
     """Pipeline topology, plus the limits that stop it being over-read."""
     if model is None:
@@ -238,6 +254,7 @@ def payload(result):
         "research_candidates": [
             asdict(x) for x in result.get("research_candidates", [])[:1000]
         ],
+        "campaign_results": _campaign_payload(result),
         "quality_report": _plain(quality),
     }
 
@@ -582,6 +599,7 @@ def arcadia(data) -> dict:
             "constraints": data["constraints"],
         },
         "evidence_records": data["evidence_records"],
+        "campaigns": data.get("campaign_results", []),
         "gate": data["finding_gate"],
         "quality": data["quality_report"],
         "counts": data["summary"],

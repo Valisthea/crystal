@@ -11,6 +11,7 @@ import inspect
 
 from . import (
     access_control,
+    asymmetric_side_effect,
     first_depositor,
     ignored_outcome,
     oracle_manipulation,
@@ -28,6 +29,7 @@ DETECTORS = {
     "unbounded-input": unbounded_input,
     "pipeline-bypass": pipeline_guard_bypass,
     "ignored-outcome": ignored_outcome,
+    "asymmetric-side-effect": asymmetric_side_effect,
 }
 
 __all__ = ["DETECTORS", "DetectorSignal", "detector_names", "run_detectors"]

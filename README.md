@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 005</h1>
+<h1 align="center">Crystal V1.00 Build 006</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -13,7 +13,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-188%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-208%20passing-brightgreen">
 </p>
 
 ---
@@ -101,6 +101,8 @@ Crystal degrades to regex parsers and says so, rather than failing.
 | `crystal doctor` | report environment readiness |
 | `crystal watch <target>` | re-scan on file change, for use during an audit |
 | `crystal validate <target> --backend medusa` | run an execution backend on generated harnesses |
+| `crystal campaign list` | list registered campaign packs |
+| `crystal campaign run <id> <target>` | run a single campaign against a project |
 | `crystal capabilities` | list engine capabilities |
 | `crystal update` | self-update a git checkout |
 
@@ -131,6 +133,7 @@ Output formats: `json`, `markdown`, `sarif`, `arcadia`.
 | `unbounded-input-in-value-op` | a caller-chosen value with no upper bound reaches the amount position of a value operation |
 | `ignored-outcome-in-settlement` | a settlement frame is handed the operation's result, discards it, and moves value anyway |
 | `pipeline-guard-bypass` | one stage of a runtime pipeline moves value through a mechanism another stage's guard does not cover |
+| `asymmetric-side-effect` | a value operation is performed without a companion side-effect that most equivalent code paths include |
 
 Every signal carries a line-anchored ordered trace and a falsification list, and
 is `RESEARCH` status. None of them can produce a confirmed finding.
@@ -209,8 +212,9 @@ graphs ─────────────► CFG (basic blocks) · call gra
 composition ────────► runtime pipelines · stage roles · Config bindings
       │
       ▼
-detectors ──────────► seven structural detectors (see Detectors)
+detectors ──────────► eight structural detectors (see Detectors)
 research engine ────► differential · composition · structural novelty
+campaign system ────► scoped campaigns · protocol packs · order sensitivity
       │
       ▼
 finding gate ───────► 8-gate proof checklist  ►  RESEARCH / VALIDATION
@@ -415,6 +419,7 @@ Environment variables: `CRYSTAL_NO_TREESITTER`, `CRYSTAL_NO_FOUNDRY`.
 - [CHANGELOG.md](CHANGELOG.md) — build history, and what each build measured
 - [CRYSTAL_V2.0.md](CRYSTAL_V2.0.md) — the Build 001 engine rebuild
 - [INTEGRATION.md](INTEGRATION.md) — consuming Crystal from another system
+- [docs/ARCADIA_HANDOFF.md](docs/ARCADIA_HANDOFF.md) — Arcadia integration and campaign system
 - [LAB_HANDOFF.md](LAB_HANDOFF.md) — laboratory handoff notes
 
 ## Licence

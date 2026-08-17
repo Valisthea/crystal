@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import __build__, __release__, __version__, process
 from .backends import backend_names, capabilities as backend_capabilities, run_backend
+from .campaigns import discover_packs
 from .detectors import detector_names
 from .discovery import discover, profile
 from .engine import research
@@ -41,6 +42,11 @@ CAPABILITIES = [
     "workspace-topology",
     "medusa-backend", "echidna-backend", "halmos-backend",
     "sarif-output", "arcadia-output", "watch-mode", "environment-doctor",
+    # v3
+    "campaign-system", "protocol-invariant-packs",
+    "order-sensitivity-engine", "boundary-engine",
+    "asymmetric-side-effect-detector", "enriched-causal-graph",
+    "campaign-cli", "ens-preset",
 ]
 
 LANGUAGES = {"solidity": SOLIDITY, "rust": RUST, "move": MOVE, "vyper": VYPER}
@@ -99,6 +105,18 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--out-dir", help="write generated artifacts here")
     validate.add_argument("--timeout", type=int, default=300)
     validate.add_argument("--no-solc", action="store_true")
+
+    campaign = sub.add_parser("campaign", help="manage campaign packs")
+    campaign_sub = campaign.add_subparsers(dest="campaign_command", required=True)
+    campaign_sub.add_parser("list", help="list registered campaigns")
+    campaign_run = campaign_sub.add_parser("run",
+                                           help="run a campaign against a project")
+    campaign_run.add_argument("campaign_id")
+    campaign_run.add_argument("project")
+    campaign_run.add_argument("--no-solc", action="store_true")
+    campaign_run.add_argument("--no-foundry", action="store_true")
+    campaign_run.add_argument("--include-tests", action="store_true")
+    campaign_run.add_argument("--pack", help="load an extra pack by module path")
 
     update = sub.add_parser("update", help="self-update a git checkout")
     update.add_argument("--check", action="store_true",
@@ -408,6 +426,61 @@ def _update(args) -> int:
     return 0
 
 
+def _campaign(args) -> int:
+    from .campaigns import run_campaign as run_single_campaign
+
+    registry = discover_packs()
+    if args.pack:
+        registry.load_pack(args.pack)
+
+    if args.campaign_command == "list":
+        print(f"crystal {__version__} build {__build__}")
+        print(f"registered packs: {', '.join(registry.list_packs())}")
+        print()
+        for campaign in registry.list_campaigns():
+            status = "enabled" if campaign.enabled else "disabled"
+            print(f"  [{status}] {campaign.campaign_id}")
+            print(f"    {campaign.name} — {campaign.description}")
+            print(f"    pack={campaign.pack}  priority={campaign.priority}")
+        return 0
+
+    if args.campaign_command == "run":
+        campaign = registry.get(args.campaign_id)
+        if campaign is None:
+            print(f"unknown campaign: {args.campaign_id}", file=sys.stderr)
+            print(f"available: {', '.join(c.campaign_id for c in registry.list_campaigns())}",
+                  file=sys.stderr)
+            return 2
+
+        print(f"running campaign {campaign.name} against {args.project}...",
+              file=sys.stderr)
+        result = research(
+            args.project,
+            use_solc=not args.no_solc,
+            use_foundry=not getattr(args, "no_foundry", False),
+            include_tests=getattr(args, "include_tests", False),
+        )
+        cr = run_single_campaign(campaign, result)
+        print(f"campaign: {cr.campaign_name}")
+        print(f"  explored={cr.total_sequences_explored} "
+              f"pruned={cr.total_sequences_pruned}")
+        if cr.warning:
+            print(f"  warning: {cr.warning}")
+        if not cr.candidates:
+            print("  no candidates produced.")
+        for candidate in cr.top_candidates:
+            print(f"  [{candidate.score:.3f}] {candidate.candidate_id}")
+            print(f"    hypothesis: {candidate.hypothesis}")
+            print(f"    sequence: {' -> '.join(candidate.state_sequence)}")
+            print(f"    delta: {candidate.state_delta}")
+            if candidate.evidence:
+                for ev in candidate.evidence[:5]:
+                    print(f"    evidence: {ev}")
+        return 0
+
+    return 2
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -433,6 +506,9 @@ def main(argv=None) -> int:
 
     if args.command == "update":
         return _update(args)
+
+    if args.command == "campaign":
+        return _campaign(args)
 
     if args.command == "scan":
         target = Path(args.project)

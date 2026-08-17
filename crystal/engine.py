@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .analysis import analyze
+from .campaigns import discover_packs, run_campaigns
 from .compiler.solc import compile_standard
 from .composition import build_composition
 from .detectors import run_detectors
@@ -84,7 +85,8 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
     call_graph = build_call_graph(contracts)
     storage_graph = build_storage_graph(contracts)
     invariants = discover_invariants(contracts)
-    sequences = generate_sequences(candidate_sequences(state_graph), invariants)
+    sequences = generate_sequences(candidate_sequences(state_graph), invariants,
+                                    state_graph=state_graph)
 
     compiler = compile_standard(project) if use_solc else {"available": False}
     compiler_model = parse_solc_ast(project) if use_solc else None
@@ -135,5 +137,13 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
     result = run_research(result)
     result["project"] = str(project)
     result["research_candidates"] = build_candidates(result)
+
+    # Campaign system: run enabled campaigns against the completed result.
+    registry = discover_packs()
+    result["campaign_registry"] = registry
+    result["campaign_results"] = run_campaigns(
+        registry.enabled(), result, top_global=3,
+    )
+
     result["quality_report"] = validate(result)
     return result

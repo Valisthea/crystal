@@ -99,8 +99,9 @@ def analyze(source, name="T.sol", only=None):
 
 def test_detector_registry():
     assert detector_names() == [
-        "access-control", "first-depositor", "ignored-outcome",
-        "oracle-manipulation", "pipeline-bypass", "reentrancy", "unbounded-input",
+        "access-control", "asymmetric-side-effect", "first-depositor",
+        "ignored-outcome", "oracle-manipulation", "pipeline-bypass",
+        "reentrancy", "unbounded-input",
     ]
     assert set(DETECTORS) == set(detector_names())
 

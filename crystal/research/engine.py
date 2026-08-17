@@ -10,6 +10,7 @@ import os
 
 from ..symbolic import SymbolicEngine
 from .behavior import derive_behavior_relations
+from .boundary import propose_boundaries
 from .composition import compose
 from .concrete import fuzz_hypothesis
 from .constraint import derive_constraints
@@ -21,6 +22,7 @@ from .foundry import detect_foundry, execute_hypothesis, plan_hypothesis
 from .impact import infer_impact_paths
 from .mutations import generate_mutations
 from .novelty import score_novelty
+from .order_sensitivity import detect_order_sensitivity
 from .statedelta import derive_state_deltas
 from .unknown_behavior import discover_unknown_behaviors
 
@@ -52,6 +54,12 @@ def run_research(result):
         {variable.name for contract in contracts for variable in contract.state_vars},
     )
     result["composition_candidates"] = compose(result)
+
+    # v3 engines.
+    result["order_sensitivity"] = detect_order_sensitivity(
+        contracts, result["state_graph"], engine,
+    )
+    result["boundary_proposals"] = propose_boundaries(contracts)
 
     result["novel_behaviors"] = score_novelty(
         contracts, result["state_deltas"], result["differential_candidates"],
