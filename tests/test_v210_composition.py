@@ -7,7 +7,7 @@ reproduced here at the size that carries the mechanism.
 
 from crystal.detectors import run_detectors
 from crystal.detectors.ignored_outcome import DETECTOR as OUTCOME_DETECTOR
-from crystal.detectors.pipeline_bypass import DETECTOR as PIPELINE_DETECTOR
+from crystal.detectors.pipeline_guard_bypass import DETECTOR as PIPELINE_DETECTOR
 from crystal.parsers import rust_ts
 from crystal.semantics.modules import build_module_graph
 from crystal.symbolic import SymbolicEngine

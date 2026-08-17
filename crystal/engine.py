@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .analysis import analyze
 from .compiler.solc import compile_standard
+from .composition import build_composition
 from .detectors import run_detectors
 from .discovery import discover, profile
 from .graphs.callgraph import build_call_graph
@@ -31,6 +32,20 @@ from .sequences import generate_sequences
 from .symbolic import SymbolicEngine
 
 
+UNBOUNDED_DETECTOR = "unbounded-input-in-value-op"
+
+
+def _unbounded_by_contract(signals) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for item in signals:
+        if item.detector != UNBOUNDED_DETECTOR:
+            continue
+        found.setdefault(item.contract, []).append(
+            f"{item.function}:{item.line} " + (item.evidence[0] if item.evidence else "")
+        )
+    return found
+
+
 def research(project, use_solc=True, languages=None, run_detector_pass=True,
              use_foundry=True, detectors=None, include_tests=False):
     sources = discover(project, languages=languages)
@@ -51,6 +66,17 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
     hypotheses = rank(generate(observations))
 
     symbolic_engine = SymbolicEngine(contracts)
+    detector_signals = run_detectors(
+        contracts, symbolic_engine, detectors, include_tests=include_tests,
+        wirings=parsed.wirings, bindings=parsed.bindings,
+        root=project, sources=sources,
+    ) if run_detector_pass else []
+    # Rebuild the composition with the unbounded-input findings so the reported
+    # model carries the same confidence as the signal derived from it.
+    composition = build_composition(
+        contracts, parsed.wirings, parsed.bindings, project, sources,
+        _unbounded_by_contract(detector_signals),
+    )
 
     program_graph = build_graph(contracts)
     state_graph = build_state_graph(contracts)
@@ -95,14 +121,12 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
         "parsers": parser_report(),
         "parser_backends": parsed.parser,
         "parse_diagnostics": parsed.diagnostics,
-        "detectors": run_detectors(contracts, symbolic_engine, detectors,
-                                   include_tests=include_tests,
-                                   wirings=parsed.wirings,
-                                   bindings=parsed.bindings)
-        if run_detector_pass else [],
+        "detectors": detector_signals,
         "runtime_wirings": parsed.wirings,
         "config_bindings": parsed.bindings,
-        "module_graph": build_module_graph(contracts, parsed.wirings, parsed.bindings),
+        "module_graph": build_module_graph(contracts, parsed.wirings,
+                                           parsed.bindings, project, sources),
+        "composition": composition,
         "use_foundry": use_foundry,
         "all_contracts": all_contracts,
         "test_contracts": test_contracts,

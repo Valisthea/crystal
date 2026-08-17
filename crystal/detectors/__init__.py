@@ -14,7 +14,7 @@ from . import (
     first_depositor,
     ignored_outcome,
     oracle_manipulation,
-    pipeline_bypass,
+    pipeline_guard_bypass,
     reentrancy,
     unbounded_input,
 )
@@ -26,7 +26,7 @@ DETECTORS = {
     "first-depositor": first_depositor,
     "oracle-manipulation": oracle_manipulation,
     "unbounded-input": unbounded_input,
-    "pipeline-bypass": pipeline_bypass,
+    "pipeline-bypass": pipeline_guard_bypass,
     "ignored-outcome": ignored_outcome,
 }
 
@@ -48,8 +48,8 @@ def _is_test_function(contracts, item) -> bool:
 
 
 def run_detectors(contracts, engine=None, selected=None,
-                  include_tests: bool = False, wirings=(),
-                  bindings=()) -> list[DetectorSignal]:
+                  include_tests: bool = False, wirings=(), bindings=(),
+                  root=".", sources=()) -> list[DetectorSignal]:
     """Run the selected detectors over production code.
 
     Test fixtures are excluded by default. A mock runtime or an `ExtBuilder`
@@ -68,11 +68,10 @@ def run_detectors(contracts, engine=None, selected=None,
         # Composition detectors need the runtime wiring; the rest do not, and
         # declaring the parameter is how a detector opts in.
         parameters = inspect.signature(module.detect).parameters
-        extra = {}
-        if "wirings" in parameters:
-            extra["wirings"] = wirings
-        if "bindings" in parameters:
-            extra["bindings"] = bindings
+        available = {"wirings": wirings, "bindings": bindings,
+                     "root": root, "sources": sources}
+        extra = {name: value for name, value in available.items()
+                 if name in parameters}
         signals.extend(module.detect(targets, engine, **extra))
     if not include_tests:
         signals = [

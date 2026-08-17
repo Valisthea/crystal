@@ -1,5 +1,62 @@
 # Changelog
 
+## Crystal V1.00 Build 005 — CheckNonce rejects all day and guards nothing
+
+Composition landed in Build 003 and worked on the F5 shape. This build makes it
+survive a real workspace, where the thing that breaks a composition detector is
+not missing the true pair — it is reporting eleven false ones.
+
+**`crystal/composition/`** now holds the analysis: `runtime_wiring` (workspace
+profile, pallet topology), `pipeline_extractor`, `stage_classifier`,
+`boundary_detector`, `config_resolver`. `semantics/modules.py` became an
+adapter over it, because two classifiers eventually disagree about what a guard
+is and only one of them is wired to the detector.
+
+**The discriminator is authority, not rejection.** `CheckNonce` rejects
+constantly and guards nothing: it compares a counter. `CheckWeight` rejects on
+resource limits. Classifying either as a guard makes every pipeline report a
+bypass and buries the real one. Stages are now one of GUARD / MOVES-VALUE /
+CHECKS-ONLY / OBSERVES, and a stage is a GUARD only when its rejection consults
+*restriction state about a principal* — not when it merely rejects. The
+CHECKS-ONLY stages are listed in the evidence, so the report says why they were
+not treated as guards instead of silently omitting them.
+
+Coverage is decided by mechanism family, which is what makes the negative case
+work: a guard on transfers covering a transfer is the system working and stays
+silent. A guard on call dispatch does not cover a fee, and that is F5.
+
+**Both runtime macro formats.** Quantus uses `#[frame_support::runtime]` with
+`#[runtime::pallet_index(N)]`; `construct_runtime!` is still everywhere in older
+trees. Supporting one gave an empty topology on half of real targets. Mock
+runtimes are excluded — `mock.rs` declares its own indices, and mixing it in
+gave 27 pallets for 18 real ones, with two aliases per index.
+
+**The warning the spec asks for.** Scanning a single pallet cannot show
+composition, so Crystal says so on stderr and in the JSON rather than reporting
+zero crossings as if that were a result. Substrate is now detected from sources
+as well as manifests, so a copied `src/` tree still warns.
+
+On the Quantus scope, at **0.85**:
+
+    [7] ReversibleTransactionExtension GUARD       — gates call-dispatch
+    [8] WormholeProofRecorderExtension OBSERVES
+    [9] ChargeTransactionPayment       MOVES-VALUE — debits the signer via fees
+        -> OnChargeTransaction::withdraw_fee -> FungibleAdapter
+    boundary: stage 9 debits the signer through fees, which stage 7 does not
+              cover: it gates call-dispatch
+
+`CheckNonce` and `CheckWeight`, both parsed and both rejecting, produce nothing.
+The reported model and the signal now carry the same confidence — they had
+diverged, 0.74 against 0.85, because only the detector counted the unbounded tip.
+
+**Not claimed.** Coverage is decided on mechanism families, which is a
+structural proxy: a guard could cover a mechanism through a path Crystal cannot
+follow, and the falsification list leads with that. Only declared composition is
+visible, and every signal now carries that limit in its own evidence.
+
+Tests: 183 passing (+17 covering the seven criteria, including the two negative
+cases that matter — format checks and a guard that does cover the mechanism).
+
 ## Crystal V1.00 Build 004 — where the debit actually happens
 
 Build 003 shipped cross-module composition and named its own limit: Config-trait

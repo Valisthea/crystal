@@ -62,6 +62,72 @@ def _contract_summaries(result):
     return summaries
 
 
+def _composition_payload(model) -> dict:
+    """Pipeline topology, plus the limits that stop it being over-read."""
+    if model is None:
+        return {"available": False, "pipelines": [], "warning": "", "limits": ""}
+    return {
+        "available": bool(model.pipelines),
+        "warning": model.warning,
+        "limits": model.limits,
+        "workspace": {
+            "is_workspace": model.topology.profile.is_workspace,
+            "runtime_found": model.topology.profile.has_runtime,
+            "runtime_files": model.topology.profile.runtime_files[:10],
+            "substrate": model.topology.profile.substrate,
+        } if model.topology and model.topology.profile else {},
+        "runtime_modules": [
+            {"index": m.index, "alias": m.alias, "crate": m.crate}
+            for m in (model.topology.modules if model.topology else [])
+        ],
+        "associated_types": model.associated_types,
+        "pipelines": [
+            {
+                "name": pipeline.name,
+                "path": pipeline.path,
+                "line": pipeline.line,
+                "stages": [
+                    {
+                        "index": stage.index,
+                        "type": stage.name,
+                        "crate": stage.crate,
+                        "role": stage.role,
+                        "scope": stage.scope(),
+                        "resolved": stage.resolved,
+                        "mechanisms": list(stage.mechanisms),
+                        "consulted_guards": list(stage.consulted_guards),
+                        "metadata_checks": list(stage.metadata_checks),
+                        "routes": list(stage.routes),
+                        "external_routes": list(stage.external_routes),
+                    }
+                    for stage in pipeline.stages
+                ],
+            }
+            for pipeline in model.pipelines
+        ],
+        "boundary_crossings": [
+            {
+                "pipeline": crossing.pipeline,
+                "guard_stage": {
+                    "index": crossing.guard.index, "type": crossing.guard.name,
+                    "role": crossing.guard.role, "scope": crossing.guard.scope(),
+                    "mechanism": crossing.guard.guard_evidence[:1],
+                },
+                "value_stage": {
+                    "index": crossing.mover.index, "type": crossing.mover.name,
+                    "role": crossing.mover.role, "scope": crossing.mover.scope(),
+                    "mechanism": crossing.mover.value_evidence[:1],
+                    "routes": list(crossing.mover.routes),
+                },
+                "boundary": crossing.boundary,
+                "confidence": crossing.confidence,
+                "notes": list(crossing.notes),
+            }
+            for crossing in model.crossings
+        ],
+    }
+
+
 def payload(result):
     compiler_model = result.get("compiler_model")
     protocol_model = result["protocol_model"]
@@ -133,6 +199,7 @@ def payload(result):
         "excluded_test_contracts": sorted(
             f"{c.name} ({Path(c.path).name})" for c in result.get("test_contracts", [])
         ) if not result.get("include_tests") else [],
+        "composition": _composition_payload(result.get("composition")),
         "finding_gate": _plain(result.get("finding_gate", {})),
         "evidence_records": [asdict(x) for x in result.get("evidence_records", [])],
         "output_contract": {

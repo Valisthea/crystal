@@ -36,7 +36,7 @@ CAPABILITIES = [
     "unbounded-input-detector", "test-fixture-classification",
     "transaction-decoded-input-taint", "pipeline-guard-bypass-detector",
     "ignored-outcome-detector", "cross-module-composition",
-    "runtime-wiring-extraction", "config-trait-resolution",
+    "runtime-wiring-extraction", "config-trait-resolution", "pipeline-stage-classification", "boundary-crossing-detection", "workspace-topology",
     "medusa-backend", "echidna-backend", "halmos-backend",
     "sarif-output", "arcadia-output", "watch-mode", "environment-doctor",
 ]
@@ -222,6 +222,9 @@ def _run_scan(args) -> dict:
 
 def _emit(result, output_format, output, quiet=False) -> None:
     data = payload(result)
+    warning = (data.get("composition") or {}).get("warning")
+    if warning and not quiet:
+        print(f"WARNING: {warning}", file=sys.stderr)
     if output_format == "json" and not output:
         print(json.dumps(data, indent=2, default=list))
         return
