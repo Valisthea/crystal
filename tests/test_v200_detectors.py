@@ -186,3 +186,46 @@ def test_selection_filters_detectors():
     assert all(s.detector == "reentrancy-ordering"
                for s in analyze(REENTRANT, only=["reentrancy"]))
     assert analyze(REENTRANT, only=["access-control"]) == []
+
+
+# Three settlement paths record a commitment leaf beside the credit; the fourth
+# credits and records nothing. This is the shape the detector exists to find.
+ASYMMETRIC_SETTLEMENT = """
+pragma solidity ^0.8.20;
+contract Settlement {
+    function settleUser(address to, uint256 amount) external {
+        mint(to, amount);
+        insertLeaf(to, amount);
+    }
+    function settleBatch(address to, uint256 amount) external {
+        mint(to, amount);
+        insertLeaf(to, amount);
+    }
+    function settleRefund(address to, uint256 amount) external {
+        mint(to, amount);
+        insertLeaf(to, amount);
+    }
+    function settleMinerFee(address to, uint256 amount) external {
+        mint(to, amount);
+    }
+}
+"""
+
+
+def test_asymmetric_side_effect_emits_a_signal():
+    """Regression: the detector raised on its own emit path.
+
+    `signal()` anchors on a function-like object; the detector passed
+    `contract=`/`function=`/`path=` as strings, so the FIRST asymmetry it ever
+    found raised TypeError instead of reporting it. The registry test above
+    asserts only the detector's NAME, which is why a detector that could never
+    emit shipped with a green suite.
+    """
+    found = analyze(ASYMMETRIC_SETTLEMENT, only=["asymmetric-side-effect"])
+    assert found, "no asymmetric-side-effect signal"
+    best = max(found, key=lambda s: s.confidence)
+    assert best.contract == "Settlement"
+    assert best.function == "settleMinerFee"
+    assert "insertLeaf" in best.title
+    assert best.falsification
+    assert any("insertLeaf" in item for item in best.evidence)

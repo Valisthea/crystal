@@ -79,4 +79,37 @@ def build_composition(contracts, wirings=(), bindings=(), root=".", sources=(),
     for pipeline in pipelines:
         model.crossings.extend(find_crossings(pipeline, unbounded_by_contract))
     model.crossings.sort(key=lambda x: -x.confidence)
+    _warn_on_unreadable_stages(model)
     return model
+
+
+def _warn_on_unreadable_stages(model: CompositionModel) -> None:
+    """A pipeline whose stages are not all in the scan root cannot cross.
+
+    Stage roles come from the stage's own body. When the scan root holds the
+    tuple but not the crate that defines a stage, that stage stays UNRESOLVED
+    and no crossing can ever be emitted from it — so the detector reports zero
+    for a target it never actually read. Silence there is indistinguishable
+    from a clean result, which is the failure this warning exists to break.
+    Only pipelines that produced NO crossing are reported: once one is out,
+    the operator already has the signal and the note would be noise.
+    """
+    crossed = {crossing.pipeline for crossing in model.crossings}
+    notes: list[str] = []
+    for pipeline in model.pipelines:
+        if pipeline.name in crossed:
+            continue
+        unresolved = [s.name for s in pipeline.stages if s.role == UNRESOLVED]
+        if not unresolved:
+            continue
+        notes.append(
+            f"`{pipeline.name}`: no crossing reported, but {len(unresolved)} of "
+            f"{len(pipeline.stages)} stages were never read "
+            f"({', '.join(unresolved[:8])}"
+            + (", ..." if len(unresolved) > 8 else "")
+            + "). A stage is classified from its own body, so one outside the "
+            "scan root can neither guard nor move value here. Re-scan from a "
+            "root that contains every stage's crate before reading this as clean."
+        )
+    if notes:
+        model.warning = "; ".join(filter(None, [model.warning, *notes]))

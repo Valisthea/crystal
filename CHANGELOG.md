@@ -1,5 +1,36 @@
 # Changelog
 
+## Crystal V1.00 Build 007 — two detectors that could only ever report nothing
+
+Both of Build 002–004's composition detectors were found unable to report, on
+the very target they were calibrated against. Neither failure was visible from
+the test suite, because both lived past the point the suite stopped looking.
+
+**`asymmetric-side-effect` raised on its own emit path.** `signal()` anchors on
+a function-like object and reads `.contract` / `.name` / `.path` / `.language`
+off it; the detector passed those as four separate string keyword arguments. So
+the first asymmetry it ever found raised `TypeError` instead of reporting it,
+and the detector had therefore never emitted a signal on any target in its life.
+The suite asserted the detector's NAME in the registry list and nothing else,
+which is exactly how a detector that cannot emit ships green. Fixed with the
+`_Anchor` adapter the sibling detector already used, and covered by a fixture in
+the shape the detector exists to find: four settlement paths, three of which
+record a commitment leaf beside the credit.
+
+**Composition reported zero when it had not read the stages.** A stage's role is
+classified from its own body, so a scan root holding the extension tuple but not
+the crate that defines a stage leaves that stage `UNRESOLVED`, and no crossing
+can ever be built from it. The model said nothing about this. Scanning
+`pallets/` — the natural choice on a Substrate workspace — returned
+`detector_signals=0` for a pipeline that does contain a live crossing, and a
+zero there is indistinguishable from a clean result. `build_composition` now
+names the unread stages, and only for pipelines that produced no crossing: once
+one is out the operator already has the signal and the note would be noise.
+
+Both fixes are held by regression tests in the direction that matters and in the
+counter-direction: the incomplete scan must speak, the complete scan must stay
+quiet. 211 tests.
+
 ## Crystal V1.00 Build 006 — Crystal becomes Arcadia's microscope
 
 Build 005 gave Crystal a composition engine and eight structural detectors. This

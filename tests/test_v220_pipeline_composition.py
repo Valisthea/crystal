@@ -292,6 +292,31 @@ def test_generic_runtime_without_a_value_stage_is_silent():
     assert not model.crossings
 
 
+# -- silence must be distinguishable from a clean result ---------------------
+
+def test_unread_stages_are_named_when_nothing_crosses():
+    """Regression: an incomplete scan root reported zero and said nothing.
+
+    A stage is classified from its own body, so scanning `pallets/` without the
+    runtime — or the runtime without `pallets/` — leaves stages UNRESOLVED and
+    no crossing can be built from them. On the real target that produced
+    `detector_signals=0` for a pipeline that does contain a live crossing,
+    which reads exactly like a clean result.
+    """
+    model = compose(TX_EXTENSION, MODERN_RUNTIME, FORMAT_CHECKS, GUARD_EXTENSION)
+    assert not model.crossings
+    assert "TxExtension" in model.warning
+    assert "never read" in model.warning
+    assert "ChargeTransactionPayment" in model.warning
+
+
+def test_complete_scan_is_not_accused_of_unread_stages():
+    """The counterweight: a scan that DID cross must not carry the note."""
+    model = compose(*FULL)
+    assert model.crossings
+    assert "never read" not in model.warning
+
+
 # -- criterion 1 (topology) and 7 (warning) ----------------------------------
 
 def test_modern_runtime_macro_is_parsed():

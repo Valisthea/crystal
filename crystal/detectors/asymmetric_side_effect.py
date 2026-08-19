@@ -47,6 +47,19 @@ class _CallSite:
     companions: set[str] = field(default_factory=set)
     is_test: bool = False
     is_genesis: bool = False
+    language: str = "rust"
+
+
+class _Anchor:
+    """Signals anchor on a function; a call site anchors on its enclosing one."""
+
+    def __init__(self, site):
+        self.contract = site.contract
+        self.name = site.function.split(".")[-1]
+        self.line = site.line
+        self.path = site.path
+        self.language = site.language
+        self.is_entry_point = True
 
 
 def _collect_call_sites(contracts, include_tests: bool = False):
@@ -95,6 +108,7 @@ def _collect_call_sites(contracts, include_tests: bool = False):
                     companions=companions,
                     is_test=function.is_test,
                     is_genesis=is_genesis,
+                    language=getattr(function, "language", "rust"),
                 ))
 
     return sites
@@ -202,18 +216,13 @@ def detect(
                 f"Does {asym['operation']} have a different accounting path in this context?",
             ]
 
-            contract_name = missing_site.contract
-            function_name = missing_site.function.split(".")[-1]
-
             signals.append(signal(
                 detector=DETECTOR,
                 title=(
                     f"{asym['operation']} without {asym['companion']} "
                     f"in {missing_site.function}"
                 ),
-                contract=contract_name,
-                function=function_name,
-                path=missing_site.path,
+                function=_Anchor(missing_site),
                 line=missing_site.line,
                 confidence=asym["confidence"],
                 reason=(
