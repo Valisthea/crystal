@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 
 from ..corpus import delta_shapes, weakness_by_detector
+from ..naming import bare_name
 from ..symbolic.algebra import ARG_PREFIX, ENV_PREFIX, RETURN_PREFIX, STATE_PREFIX
 
 STEP_SUFFIX_RE = re.compile(r"#\d+")
@@ -84,7 +85,7 @@ def _delta_shape(delta) -> tuple[str, ...]:
 
 
 def _role(name: str) -> str:
-    lowered = name.lower()
+    lowered = bare_name(name).lower()
     if any(token in lowered for token in SHARE_TOKENS):
         return "share"
     if any(token in lowered for token in ASSET_TOKENS):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from ..naming import qualify
 from ..symbolic import SymbolicEngine
 from .behavior import derive_behavior_relations
 from .boundary import propose_boundaries
@@ -51,7 +52,10 @@ def run_research(result):
     )
     result["delta_anomalies"] = detect_delta_anomalies(
         result["state_deltas"], result.get("protocol_model"),
-        {variable.name for contract in contracts for variable in contract.state_vars},
+        # Qualified, so an accounting pair binds inside one contract instead of
+        # pairing one contract's assets against another's supply.
+        {qualify(contract.name, variable.name)
+         for contract in contracts for variable in contract.state_vars},
     )
     result["composition_candidates"] = compose(result)
 

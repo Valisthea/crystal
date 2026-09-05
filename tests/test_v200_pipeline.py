@@ -82,8 +82,8 @@ def test_state_deltas_use_the_symbolic_model(solidity_result):
     sequence = next(
         d for d in deltas if list(d.sequence) == ["Vault.deposit", "Vault.donate"]
     )
-    assert sequence.delta["totalAssets"] == "ARG:msg.value#1 + ARG:msg.value#2"
-    assert sequence.delta["totalSupply"] == "ARG:msg.value#1"
+    assert sequence.delta["Vault::totalAssets"] == "ARG:msg.value#1 + ARG:msg.value#2"
+    assert sequence.delta["Vault::totalSupply"] == "ARG:msg.value#1"
 
 
 def test_asymmetry_is_detected_and_symmetric_pairs_are_not(solidity_result):
@@ -220,8 +220,8 @@ def test_substrate_pallet_end_to_end(tmp_path):
         d for d in result["state_deltas"]
         if list(d.sequence) == ["vault.deposit", "vault.donate"]
     )
-    assert sequence.delta["TotalAssets"] == "ARG:amount#1 + ARG:amount#2"
-    assert sequence.delta["TotalSupply"] == "ARG:amount#1"
+    assert sequence.delta["vault::TotalAssets"] == "ARG:amount#1 + ARG:amount#2"
+    assert sequence.delta["vault::TotalSupply"] == "ARG:amount#1"
 
     assert any(a.kind == "asset-share-asymmetry" for a in result["delta_anomalies"])
     assert any(

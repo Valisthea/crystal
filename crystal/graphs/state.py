@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..naming import StateNamespace, bare_name
+
 
 # ── State classification ────────────────────────────────────────────────
 
@@ -50,8 +52,13 @@ REGISTRY_HINTS = frozenset({
 
 
 def classify_state(name: str) -> str:
-    """Classify a state variable by semantic category."""
-    lower = name.lower().replace("_", "")
+    """Classify a state variable by semantic category.
+
+    Category is a question about meaning, not identity, so the contract
+    namespace is stripped first: `Vault::balances` classifies as `balance`
+    exactly like the bare `balances`.
+    """
+    lower = bare_name(name).lower().replace("_", "")
     for hint_set, category in (
         (BALANCE_HINTS, "balance"),
         (OWNERSHIP_HINTS, "ownership"),
@@ -190,13 +197,14 @@ def _classify_edge(source_trans, target_trans, produced, consumed) -> str:
     return "write-read"
 
 
-def _key_overlap(contracts, source_fn, target_fn, shared_vars) -> str:
+def _key_overlap(contracts, namespace, source_fn, target_fn, shared_vars) -> str:
     """Detect when writer and reader use the same mapping key."""
     var_keys: dict[str, set[str]] = {}
     for c in contracts:
         for sv in c.state_vars:
-            if sv.name in shared_vars and sv.is_mapping:
-                var_keys[sv.name] = set(sv.key_types)
+            slot = namespace.qualify(c.name, sv.name)
+            if slot in shared_vars and sv.is_mapping:
+                var_keys[slot] = set(sv.key_types)
     if not var_keys:
         return ""
     return "shared-key" if var_keys else ""
@@ -207,14 +215,19 @@ def _key_overlap(contracts, source_fn, target_fn, shared_vars) -> str:
 def build_state_graph(contracts):
     sg = StateGraph()
     fn_meta: dict[str, StateTransition] = {}
+    # State names are only unique within a contract. Keying the graph on bare
+    # names merges every same-named variable in the project into one node,
+    # which both loses real edges and invents edges between contracts that
+    # share nothing but a spelling.
+    namespace = StateNamespace(contracts)
 
     for c in contracts:
         for f in c.functions:
             qualified = f"{c.name}.{f.name}"
             trans = StateTransition(
                 function=qualified,
-                reads=set(f.reads),
-                writes=set(f.writes),
+                reads={namespace.qualify(c.name, r) for r in f.reads},
+                writes={namespace.qualify(c.name, w) for w in f.writes},
                 visibility=f.visibility,
                 contract=c.name,
                 path=f.path or c.path,
@@ -240,8 +253,9 @@ def build_state_graph(contracts):
     sv_info: dict[str, tuple] = {}
     for c in contracts:
         for sv in c.state_vars:
-            sv_info[sv.name] = (c.name, sv.is_mapping, tuple(sv.key_types),
-                                sv.line, c.path)
+            sv_info[namespace.qualify(c.name, sv.name)] = (
+                c.name, sv.is_mapping, tuple(sv.key_types), sv.line, c.path
+            )
 
     for name in sorted(all_state):
         info = sv_info.get(name)
@@ -278,7 +292,9 @@ def build_state_graph(contracts):
                         + 0.02 * len(produced - consumed))
 
             categories = tuple(sorted({classify_state(s) for s in consumed}))
-            key_rel = _key_overlap(contracts, a.function, b.function, consumed)
+            key_rel = _key_overlap(
+                contracts, namespace, a.function, b.function, consumed
+            )
 
             sg.causal_edges.append(CausalEdge(
                 source=a.function,

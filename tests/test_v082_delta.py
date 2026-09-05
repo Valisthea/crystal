@@ -30,5 +30,5 @@ def test_state_delta_finds_asset_share_asymmetry(tmp_path):
     assert any(x.kind == "asset-share-asymmetry" for x in r["delta_anomalies"])
     target=next(x for x in r["delta_anomalies"]
                  if x.kind == "asset-share-asymmetry")
-    assert "totalAssets" in target.sequence or target.state == "totalAssets"
+    assert "totalAssets" in target.sequence or target.state == "V::totalAssets"
     assert "ARG" in target.delta

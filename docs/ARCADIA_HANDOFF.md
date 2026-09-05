@@ -45,16 +45,16 @@ Each entry in `campaigns` is a campaign result:
       "category": "ownership",
       "target_contract": "Token",
       "target_functions": ["Token.setOwner", "Token.transfer"],
-      "hypothesis": "ownership transition may leave stale authority; affected state: owner, balances",
+      "hypothesis": "ownership transition may leave stale authority; affected state: Token::owner, Token::balances",
       "state_sequence": ["Token.setOwner", "Token.transfer"],
-      "state_before": {"owner": "S0:owner"},
-      "state_after": {"owner": "ARG:x"},
-      "state_delta": {"owner": "ARG:x - S0:owner"},
+      "state_before": {"Token::owner": "S0:Token::owner"},
+      "state_after": {"Token::owner": "ARG:x"},
+      "state_delta": {"Token::owner": "ARG:x - S0:Token::owner"},
       "causal_chain": ["ownership-action"],
       "confidence": 0.7,
       "novelty_score": 0.8,
       "evidence": [
-        "delta(owner) = ARG:x - S0:owner",
+        "delta(Token::owner) = ARG:x - S0:Token::owner",
         "invariant-candidate: previous owner must not retain authority"
       ],
       "suggested_next_action": "Arcadia: investigate exploitability",
@@ -80,6 +80,14 @@ Each entry in `campaigns` is a campaign result:
 3. **Use `state_delta` to understand what moved.** Deltas are symbolic
    expressions over attacker-controlled symbols (`ARG:`) and protocol state
    (`S0:`).
+
+   State keys are **contract-qualified**: `Token::owner`, not `owner`. A bare
+   name does not identify a storage slot on a multi-contract protocol, and two
+   contracts that both declare `balances` are two variables. Split on the first
+   `::` to recover the contract and the bare name; keys with no `::` come from
+   single-contract effects, where no ambiguity exists. Match on the bare name
+   when asking what a variable *means* (is this a balance? a nonce?) and on the
+   full key when asking *which* variable it is.
 
 4. **Use `suggested_next_action` as a hint**, not a command. Crystal suggests
    what Arcadia should investigate, but Arcadia decides.

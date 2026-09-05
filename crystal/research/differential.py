@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..naming import bare_name
 from ..symbolic import SymbolicEngine
 from ..symbolic.algebra import ARG_PREFIX, SymExpr
 
@@ -198,7 +199,8 @@ _CATEGORY_HINTS = {
 
 
 def _categorize(name: str) -> str:
-    lower = name.lower().replace("_", "")
+    # Category is about meaning, so the contract namespace comes off first.
+    lower = bare_name(name).lower().replace("_", "")
     for category, hints in _CATEGORY_HINTS.items():
         if lower in hints or any(h in lower for h in hints):
             return category

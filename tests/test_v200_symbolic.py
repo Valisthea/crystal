@@ -141,19 +141,27 @@ def test_guards_are_recorded_never_invented():
 
 def test_sequence_accumulates_per_step_symbols():
     result = engine().execute_sequence(["V.deposit", "V.donate"])
-    assert result.deltas["totalAssets"] == "ARG:msg.value#1 + ARG:msg.value#2"
-    assert result.deltas["totalSupply"] == "ARG:msg.value#1"
+    assert result.deltas["V::totalAssets"] == "ARG:msg.value#1 + ARG:msg.value#2"
+    assert result.deltas["V::totalSupply"] == "ARG:msg.value#1"
 
 
 def test_sequence_detects_symmetry():
     result = engine().execute_sequence(["V.deposit", "V.withdraw"])
-    assert result.deltas["totalAssets"] == result.deltas["totalSupply"]
+    assert result.deltas["V::totalAssets"] == result.deltas["V::totalSupply"]
 
 
 def test_sequence_before_after_are_symbolic():
     result = engine().execute_sequence(["V.donate"])
-    assert result.before["totalAssets"].startswith("S0:")
-    assert "ARG:msg.value#1" in result.after["totalAssets"]
+    assert result.before["V::totalAssets"].startswith("S0:")
+    assert "ARG:msg.value#1" in result.after["V::totalAssets"]
+
+
+def test_single_function_effects_stay_unqualified():
+    """A function effect lives in one contract, so it keeps the bare names the
+    rest of that contract's model is keyed by. Only shared state is namespaced."""
+    assert set(effect("V.deposit").deltas) == {
+        "balances", "totalAssets", "totalSupply",
+    }
 
 
 def test_unknown_function_yields_none():

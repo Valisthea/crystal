@@ -68,13 +68,20 @@ def _combine(old: str, new: str) -> str:
     return f"({old}) + ({new})"
 
 
-def _fallback_delta(functions, sequence, score):
+def _fallback_delta(functions, sequence, score, namespace):
     touched: set[str] = set()
     delta: dict[str, str] = {}
     for function in functions:
-        touched |= set(function.reads) | set(function.writes)
+        # Namespaced like the symbolic path, so a fallback delta for a
+        # cross-contract sequence does not merge two contracts' variables.
+        slot = {
+            name: namespace.qualify(function.contract, name)
+            for name in set(function.reads) | set(function.writes)
+        }
+        touched |= set(slot.values())
         for state, expression in _regex_effect(function).items():
-            delta[state] = _combine(delta.get(state, "0"), expression)
+            key = slot.get(state, state)
+            delta[key] = _combine(delta.get(key, "0"), expression)
     for state in touched:
         delta.setdefault(state, "0")
     before = {state: "0" for state in sorted(touched)}
@@ -120,7 +127,9 @@ def derive_state_deltas(contracts, sequence_hypotheses, engine=None, limit=150):
                 ))[:32],
             ))
         else:
-            out.append(_fallback_delta(resolved, sequence, hypothesis.score))
+            out.append(_fallback_delta(
+                resolved, sequence, hypothesis.score, engine.namespace,
+            ))
 
     return sorted(out, key=lambda x: (-x.confidence, -len(x.changed), x.sequence))
 

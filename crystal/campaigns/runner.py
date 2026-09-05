@@ -7,6 +7,7 @@ and return top-K candidates per campaign.
 
 from __future__ import annotations
 
+from ..naming import bare_name
 from ..quality.normalize import stable_id
 from .definition import CampaignDefinition
 from .result import CampaignCandidate, CampaignResult
@@ -117,10 +118,14 @@ def run_campaign(
         for sig in relevant_signals:
             evidence.append(f"detector:{sig.detector} on {sig.function} "
                             f"(conf {sig.confidence})")
+        # A campaign names concepts (`owner`, `nonce`); a delta names slots
+        # (`Registry::owner`). Match on the bare name so namespacing does not
+        # silently drop every invariant association.
+        changed_bare = {bare_name(name) for name in delta.changed}
         for inv in campaign.invariants:
             for state in inv.affected_state:
-                if state in delta.changed or any(
-                    state.lower() in c.lower() for c in delta.changed
+                if state in changed_bare or any(
+                    state.lower() in name.lower() for name in changed_bare
                 ):
                     evidence.append(f"invariant-candidate: {inv.statement}")
                     break

@@ -36,4 +36,4 @@ def test_causal_chain_and_relevance(tmp_path):
     assert all(e["consumed"] for e in target.causal_edges)
     assert all(x.chain != ["V.updatePrice","V.withdraw","V.deposit"] for x in chains)
     assert all(x.chain != ["V.withdraw","V.deposit","V.updatePrice"] for x in chains)
-    assert any(set(e["consumed"]) == {"totalAssets"} for e in target.causal_edges)
+    assert any(set(e["consumed"]) == {"V::totalAssets"} for e in target.causal_edges)

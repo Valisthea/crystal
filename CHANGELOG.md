@@ -1,5 +1,63 @@
 # Changelog
 
+## Crystal V1.00 Build 009 — two contracts, one variable, no way to tell
+
+Crystal identified every state variable by its bare name. `balances` was
+`balances`, whichever contract declared it. On a single-contract target that is
+harmless; on a protocol — which is the only kind of target Crystal claims to be
+built for — it was wrong in three directions at once.
+
+Two contracts, each with a `balances`, and the sequence `Alpha.credit ->
+Beta.debit`:
+
+```
+deltas  = {'balances': 'ARG:a#1 - ARG:a#2'}
+edges   = [('Alpha.credit','Beta.debit',('balances',)),
+           ('Beta.debit','Alpha.credit',('balances',))]
+nodes   = [('balances', 'Beta')]
+```
+
+**The delta was a false conservation law.** One shared `SymbolicState` keyed on
+bare names, so two unrelated contracts each moving money netted to a single
+expression that reads as "this sequence conserves `balances`". The one shape
+Crystal exists to notice — an asymmetry in accounting — was being cancelled out
+by a spelling coincidence.
+
+**The causal edges were invented.** `build_state_graph` intersected every
+function's reads and writes across the whole project, so any two contracts
+sharing a variable name got an edge in both directions. Those edges feed
+sequence generation, campaigns and order-sensitivity, so a name collision
+manufactured research candidates downstream.
+
+**A state node silently overwrote its namesake.** `sv_info[sv.name]` kept
+whichever contract was parsed last; Alpha's `balances` node did not exist.
+
+State identity is now the qualified `Alpha::balances`, applied where state is
+actually shared: the symbolic engine namespaces `execute_sequence` (a single
+function's effect never spans contracts, so it keeps bare names), and the state
+graph namespaces transitions, nodes and edges. Inheritance resolves to the
+declaring contract, so `Child.balances` and `Parent.balances` stay one slot and
+no edge crossing the inheritance boundary is lost. A name declared nowhere in
+the scanned set stays with its accessor rather than merging two contracts that
+happen to share an unscanned base.
+
+Identity is qualified; meaning is bare. Everything asking what a variable *is*
+rather than which one it is — category classification in the state graph, the
+differential engine, the invariant engine and novelty scoring, plus campaign
+invariant association — reads through `bare_name` first, so no classifier
+changed its answer.
+
+Accounting pairs now bind inside one contract. `Vault::totalAssets` against
+`Registry::totalSupply` was never a relation, only two protocols sharing a
+vocabulary; each side is compared against its own contract's counterpart.
+
+Reports gain the information as a side effect: `delta(Vault::totalAssets)`
+names the slot, where `delta(balances)` on a twelve-contract protocol named
+nothing.
+
+Tests: 232 passing (+19, of which 18 are the new namespace suite; each pins one
+of the failure modes above).
+
 ## Crystal V1.00 Build 008 — the directory that pretended to be Solidity
 
 Two regressions found in live use, both invisible to the existing suite.

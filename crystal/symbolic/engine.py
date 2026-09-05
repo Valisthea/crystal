@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from .. import ir as I
 from ..models import Function
+from ..naming import StateNamespace, qualify
 from .algebra import ARG_PREFIX, ENV_PREFIX, SENDER, ExpressionReader, SymExpr
 from .constraints import (
     ASSERT,
@@ -78,6 +79,11 @@ class _Context:
     # True when the enclosing type is decoded from untrusted input, which makes
     # its fields attacker-chosen rather than protocol state.
     user_decoded: bool = False
+    # Maps each in-scope state name to the contract owning its storage slot.
+    # Empty when the state is not shared across contracts, which keeps
+    # single-function effects keyed by the bare names the rest of that
+    # contract's model uses.
+    namespace: dict[str, str] = field(default_factory=dict)
     call_records: list[CallRecord] = field(default_factory=list)
 
     def fork(self) -> "_Context":
@@ -85,7 +91,7 @@ class _Context:
             self.state.clone(), dict(self.locals), set(self.params),
             set(self.state_names), list(self.constraints), list(self.unsupported),
             list(self.external_calls), self.suffix, self.origin, self.feasible,
-            self.depth, self.stack, self.user_decoded,
+            self.depth, self.stack, self.user_decoded, dict(self.namespace),
         )
         clone.call_records = list(self.call_records)
         return clone
@@ -93,6 +99,18 @@ class _Context:
     def note(self, message: str) -> None:
         if message not in self.unsupported:
             self.unsupported.append(message)
+
+    def qualified(self, path: str, base: str) -> tuple[str, str]:
+        """Namespace one state access.
+
+        `balances[msg.sender]` in `Vault` becomes `Vault::balances[msg.sender]`
+        over base `Vault::balances`, so a sequence that also touches another
+        contract's `balances` keeps the two apart in the shared state.
+        """
+        owner = self.namespace.get(base)
+        if not owner:
+            return path, base
+        return qualify(owner, path), qualify(owner, base)
 
 
 def _normalize(path: str) -> str:
@@ -119,6 +137,7 @@ class SymbolicEngine:
         self.by_contract: dict[str, dict[str, Function]] = {}
         self.state_names: dict[str, set[str]] = {}
         self.user_decoded: dict[str, bool] = {}
+        self.namespace = StateNamespace(self.contracts)
         for contract in self.contracts:
             names = {variable.name for variable in contract.state_vars}
             self.state_names[contract.name] = names
@@ -189,7 +208,11 @@ class SymbolicEngine:
         branch_dependent = False
 
         for step, function in enumerate(functions, start=1):
-            contexts = self._execute(function, state, suffix=f"#{step}", depth=0)
+            # One state is shared across every step, so identically named
+            # variables in two contracts must not land on the same key.
+            contexts = self._execute(
+                function, state, suffix=f"#{step}", depth=0, namespaced=True,
+            )
             feasible = [c for c in contexts if c.feasible] or contexts[:1]
             branch_dependent = branch_dependent or len(feasible) > 1
             chosen = feasible[0]
@@ -256,16 +279,22 @@ class SymbolicEngine:
     def _execute(self, function: Function, state: SymbolicState,
                  suffix: str, depth: int,
                  arguments: dict[str, SymExpr] | None = None,
-                 stack: tuple[str, ...] = ()) -> list[_Context]:
+                 stack: tuple[str, ...] = (),
+                 namespaced: bool = False) -> list[_Context]:
+        names = self.state_names.get(function.contract, set())
         context = _Context(
             state=state,
             params={p.name for p in function.params if p.name},
-            state_names=set(self.state_names.get(function.contract, set())),
+            state_names=set(names),
             suffix=suffix,
             origin=f"{function.contract}.{function.name}",
             depth=depth,
             stack=stack + (f"{function.contract}.{function.name}",),
             user_decoded=self.user_decoded.get(function.contract, False),
+            namespace={
+                name: self.namespace.owner(function.contract, name)
+                for name in names
+            } if namespaced else {},
         )
         if arguments:
             context.locals.update(arguments)
@@ -335,14 +364,16 @@ class SymbolicEngine:
                 path = base = declared[0]
         value = self._read(context, statement.value.text if statement.value else "0")
         operator = statement.operator or "="
+        is_state = base in context.state_names
+        q_path, q_base = context.qualified(path, base) if is_state else (path, base)
 
         if operator == "?=":
             context.note(
-                f"{context.origin}: unmodelled mutation of {base} "
+                f"{context.origin}: unmodelled mutation of {q_base} "
                 f"at line {statement.line}"
             )
             current = self._current(context, path, base)
-            value = current + SymExpr.symbol(f"MUTATE:{base}{context.suffix}")
+            value = current + SymExpr.symbol(f"MUTATE:{q_base}{context.suffix}")
         elif operator != "=":
             current = self._current(context, path, base)
             value = {
@@ -356,10 +387,10 @@ class SymbolicEngine:
                     f"{context.origin}: opaque compound operator "
                     f"'{operator}' at line {statement.line}"
                 )
-                value = current + SymExpr.symbol(f"OPAQUE:{base}{context.suffix}")
+                value = current + SymExpr.symbol(f"OPAQUE:{q_base}{context.suffix}")
 
-        if base in context.state_names:
-            context.state.write(path, base, value)
+        if is_state:
+            context.state.write(q_path, q_base, value)
         else:
             context.locals[path] = value
         return [context]
@@ -426,7 +457,8 @@ class SymbolicEngine:
             return [context]
         base = _base_of(path)
         if base in context.state_names:
-            context.state.write(path, base, SymExpr.zero())
+            q_path, q_base = context.qualified(path, base)
+            context.state.write(q_path, q_base, SymExpr.zero())
         else:
             context.locals[path] = SymExpr.zero()
         return [context]
@@ -466,8 +498,12 @@ class SymbolicEngine:
             if parameter.name:
                 arguments[parameter.name] = self._read(context, argument.text)
         results = self._execute(
+            # The callee was resolved inside the caller's own contract, so it
+            # inherits the caller's namespacing. An empty map means either an
+            # unnamespaced effect or a contract with no state at all, and both
+            # want the same thing: bare names.
             callee, context.state, context.suffix, context.depth + 1,
-            arguments, context.stack,
+            arguments, context.stack, bool(context.namespace),
         )
         feasible = [result for result in results if result.feasible] or results
         if not feasible:
@@ -530,7 +566,7 @@ class SymbolicEngine:
 
     def _current(self, context: _Context, path: str, base: str) -> SymExpr:
         if base in context.state_names:
-            return context.state.read(path, base)
+            return context.state.read(*context.qualified(path, base))
         return context.locals.get(path, SymExpr.symbol(f"LOCAL:{path}{context.suffix}"))
 
     def _resolve(self, context: _Context, raw_path: str) -> SymExpr:
@@ -547,14 +583,14 @@ class SymbolicEngine:
                 # Fields of a transaction-decoded type are chosen by whoever
                 # signed the transaction, not by the protocol.
                 return SymExpr.symbol(f"{ARG_PREFIX}self.{path}{context.suffix}")
-            return context.state.read(path, base)
+            return context.state.read(*context.qualified(path, base))
         if base in context.params:
             return SymExpr.symbol(f"{ARG_PREFIX}{path}{context.suffix}")
         if base in context.locals:
             return context.locals[base]
         field = path.split(".")[-1].split("[")[0]
         if field != base and field in context.state_names:
-            return context.state.read(field, field)
+            return context.state.read(*context.qualified(field, field))
         if path.startswith(("block.", "msg.", "tx.")):
             return SymExpr.symbol(f"{ENV_PREFIX}{path}")
         return SymExpr.symbol(f"{ENV_PREFIX}{path}{context.suffix}")

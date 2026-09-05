@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 008</h1>
+<h1 align="center">Crystal V1.00 Build 009</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -13,7 +13,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-213%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-232%20passing-brightgreen">
 </p>
 
 ---
@@ -177,15 +177,17 @@ Every signal carries an **ordered trace anchored to line numbers** and a
 ### Symbolic state deltas
 
 ```
-| Sequence                        | Delta                                          |
-| ------------------------------- | ---------------------------------------------- |
-| Vault.deposit -> Vault.donate   | totalAssets = ARG:msg.value#1 + ARG:msg.value#2 |
-|                                 | totalSupply = ARG:msg.value#1                   |
+| Sequence                       | Delta                                                  |
+| ------------------------------ | ------------------------------------------------------ |
+| Vault.deposit -> Vault.donate  | Vault::totalAssets = ARG:msg.value#1 + ARG:msg.value#2 |
+|                                | Vault::totalSupply = ARG:msg.value#1                   |
 ```
 
 `totalAssets` moved twice while `totalSupply` moved once. That asymmetry is a
 donation path — the ingredient of a share-inflation attack — and Crystal found
-it without knowing what `donate` means.
+it without knowing what `donate` means. State is named by contract, because
+`balances` alone does not identify a slot on a multi-contract protocol — see
+[State is namespaced by contract](#state-is-namespaced-by-contract).
 
 ---
 
@@ -246,6 +248,30 @@ inflation attack manipulates.
 Anything the engine cannot model exactly — inline assembly, unbounded loops,
 unresolved storage mutations — is recorded in `unsupported`, never
 approximated.
+
+### State is namespaced by contract
+
+A state variable is unique only inside its contract, so anything that merges
+state across contracts keys on `Alpha::balances`, not `balances`:
+
+```
+| Sequence                       | Delta                          |
+| ------------------------------ | ------------------------------ |
+| Alpha.credit -> Beta.debit     | Alpha::balances = ARG:a#1      |
+|                                | Beta::balances  = -ARG:a#2     |
+```
+
+Keyed on the bare name, those two lines collapse into
+`balances = ARG:a#1 - ARG:a#2` — which reads as a conservation law across a
+sequence where two unrelated contracts each moved money. The same collision
+gave the causal graph an edge between any two contracts that shared a variable
+name, and those edges feed sequence generation and campaigns.
+
+**Identity is qualified; meaning is bare.** Category classification, accounting
+pairs and campaign invariants all read through the bare name, so namespacing
+separates contracts without changing what any classifier concludes. Inherited
+state resolves to the declaring contract, so `Child.balances` and
+`Parent.balances` remain one slot.
 
 ### Multi-language
 

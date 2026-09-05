@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .naming import bare_name
+
 
 @dataclass
 class InvariantCandidate:
@@ -36,7 +38,7 @@ _APPROVAL_HINTS = {"approved", "approval", "approvals", "getapproved"}
 
 
 def _classify(name: str) -> str:
-    lower = name.lower().replace("_", "")
+    lower = bare_name(name).lower().replace("_", "")
     for hints, cat in (
         (_BALANCE_HINTS, "balance"),
         (_OWNERSHIP_HINTS, "ownership"),

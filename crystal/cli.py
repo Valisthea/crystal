@@ -47,6 +47,7 @@ CAPABILITIES = [
     "order-sensitivity-engine", "boundary-engine",
     "asymmetric-side-effect-detector", "enriched-causal-graph",
     "campaign-cli", "ens-preset",
+    "cross-contract-state-namespacing",
 ]
 
 LANGUAGES = {"solidity": SOLIDITY, "rust": RUST, "move": MOVE, "vyper": VYPER}
