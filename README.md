@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 010</h1>
+<h1 align="center">Crystal V1.00 Build 011</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -13,7 +13,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-253%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-256%20passing-brightgreen">
 </p>
 
 ---
@@ -319,9 +319,14 @@ reportable:
 
 ```
 PegOutContract.refundPegOut -> CollateralManagement.slashPegOutCollateral
-  call-flow via _collateralManagement.slashPegOutCollateral
+  call-flow via _transfer -> _collateralManagement.slashPegOutCollateral
   consumed: CollateralManagement::collateral, CollateralManagement::slashed
 ```
+
+A chain is anchored on a function a caller can actually enter. When the
+external call sits in an internal helper, the edge is attributed to the entry
+points that reach it and the helper is named in the trace — anchoring on
+`_transfer` would report a chain nobody can invoke and lose the reachable one.
 
 Binding is by **declared type, never by bare function name** — two contracts
 can both define `settle` without being the same `settle`. A protocol whose

@@ -341,16 +341,19 @@ def _call_edges(contracts, fn_meta) -> list[CausalEdge]:
     seen: set[tuple[str, str, int]] = set()
 
     for contract in contracts:
+        reachable = _reachable_external_calls(contract)
         for function in contract.functions:
-            if function.ir is None:
-                continue
             source = f"{contract.name}.{function.name}"
             source_trans = fn_meta.get(source)
             if source_trans is None:
                 continue
-            for call in function.ir.calls():
-                if call.kind not in I.EXTERNAL_CALL_KINDS or not call.receiver:
-                    continue
+            # Only from a function something can actually call. An external
+            # call made inside an internal helper belongs to the entry points
+            # that reach it: `_transfer` is not callable, `refund` is.
+            if not (source_trans.visibility in {"public", "external"}
+                    or source_trans.is_entry_point):
+                continue
+            for call, hops in reachable.get(function.name, ()):
                 for target, confidence in bindings.resolve(
                     contract.name, call.receiver, call.callee
                 ):
@@ -385,9 +388,52 @@ def _call_edges(contracts, fn_meta) -> list[CausalEdge]:
                         source_line=call.line,
                         target_line=target_trans.line,
                         key_relation="declared-type",
-                        condition=f"{call.receiver}.{call.callee}",
+                        condition=" -> ".join(
+                            list(hops) + [f"{call.receiver}.{call.callee}"]
+                        ),
                     ))
     return edges
+
+
+def _reachable_external_calls(contract, max_depth: int = 4):
+    """External calls each function reaches, following internal calls.
+
+    Returns `{function name: [(call, internal hops taken to reach it)]}`. The
+    hops are kept so the evidence can say `refund -> _transfer -> _c.slash`
+    rather than anchoring a chain on a helper the caller cannot invoke.
+    """
+    declared = {function.name: function for function in contract.functions}
+    direct: dict[str, list] = {}
+    internal: dict[str, list[str]] = {}
+
+    for function in contract.functions:
+        outgoing, inner = [], []
+        for call in (function.ir.calls() if function.ir is not None else ()):
+            if call.kind in I.EXTERNAL_CALL_KINDS and call.receiver:
+                outgoing.append(call)
+            elif (call.kind in {I.INTERNAL_CALL, I.BUILTIN_CALL}
+                  and call.callee in declared
+                  and call.callee != function.name):
+                inner.append(call.callee)
+        direct[function.name] = outgoing
+        internal[function.name] = inner
+
+    def walk(name, seen, depth, hops):
+        found = [(call, hops) for call in direct.get(name, ())]
+        if depth >= max_depth:
+            return found
+        for callee in internal.get(name, ()):
+            if callee in seen:
+                continue
+            found.extend(
+                walk(callee, seen | {callee}, depth + 1, hops + (callee,))
+            )
+        return found
+
+    return {
+        function.name: walk(function.name, frozenset({function.name}), 0, ())
+        for function in contract.functions
+    }
 
 
 # ── Sequence candidate generation ───────────────────────────────────────

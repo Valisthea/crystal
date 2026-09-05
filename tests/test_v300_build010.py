@@ -71,6 +71,34 @@ contract PegOutContract {
 }
 """
 
+# The same composition, but reached through an internal helper: the external
+# call lives in `_transfer`, which no caller outside the contract can invoke.
+COMPOSED_VIA_HELPER = """
+pragma solidity ^0.8.20;
+interface ICollateralManagement {
+    function slashPegOutCollateral(address who, uint256 amount) external;
+}
+contract CollateralManagement is ICollateralManagement {
+    mapping(address => uint256) public collateral;
+    uint256 public slashed;
+    function slashPegOutCollateral(address who, uint256 amount) external {
+        collateral[who] -= amount;
+        slashed += amount;
+    }
+}
+contract PegOutContract {
+    ICollateralManagement _collateralManagement;
+    uint256 public pegOutCount;
+    function refundPegOut(address who, uint256 amount) external {
+        pegOutCount += 1;
+        _transfer(who, amount);
+    }
+    function _transfer(address who, uint256 amount) internal {
+        _collateralManagement.slashPegOutCollateral(who, amount);
+    }
+}
+"""
+
 VAULT = """
 pragma solidity ^0.8.20;
 contract Vault {
@@ -342,6 +370,40 @@ def test_composition_reports_a_protocol_that_only_composes(tmp_path):
         "CollateralManagement.slashPegOutCollateral",
     ]
     assert "cross-contract" in chain.mechanism
+
+
+def test_a_call_through_an_internal_helper_anchors_on_the_entry_point(tmp_path):
+    """The chain must start where a caller can actually enter.
+
+    The external call lives in `_transfer`, which is internal. Anchoring the
+    chain there reports something nobody can invoke, and loses the reachable
+    chain through `refundPegOut` entirely.
+    """
+    graph = build_state_graph(_contracts(tmp_path, COMPOSED_VIA_HELPER))
+    calls = [e for e in graph.causal_edges if e.edge_kind == "call-flow"]
+    assert [e.source for e in calls] == ["PegOutContract.refundPegOut"]
+    # The helper it went through is named, so the evidence stays honest about
+    # where the call actually is.
+    assert calls[0].condition == (
+        "_transfer -> _collateralManagement.slashPegOutCollateral"
+    )
+
+
+def test_an_unreachable_internal_call_produces_no_chain(tmp_path):
+    """An internal helper is not an entry point, however much it calls out."""
+    graph = build_state_graph(_contracts(tmp_path, COMPOSED_VIA_HELPER))
+    assert not [
+        e for e in graph.causal_edges if e.source == "PegOutContract._transfer"
+    ]
+
+
+def test_composition_through_a_helper_is_reported(tmp_path):
+    result = research(str(_project(tmp_path, COMPOSED_VIA_HELPER, "P.sol")),
+                      use_solc=False, use_foundry=False)
+    chains = [c.chain for c in result["composition_candidates"]]
+    assert ["PegOutContract.refundPegOut",
+            "CollateralManagement.slashPegOutCollateral"] in chains
+    assert not any(c[0].endswith("._transfer") for c in chains)
 
 
 # -- #5 the minimal asymmetry ----------------------------------------------

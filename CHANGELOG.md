@@ -1,5 +1,38 @@
 # Changelog
 
+## Crystal V1.00 Build 011 — the chain that started where nobody could enter
+
+Build 010's cross-contract call edges anchored on whichever function contained
+the call. That is wrong whenever the call sits in an internal helper, which in
+Solidity is most of the time:
+
+```
+contract PegOut {
+    function refundPegOut(...) external { _transfer(who, amount); }
+    function _transfer(...) internal { _collateralManagement.slash(...); }
+}
+```
+
+Build 010 reported the chain `PegOut._transfer -> Collateral.slash`. `_transfer`
+is internal: no caller can invoke it, so the chain is not actionable. And the
+chain that *is* actionable — through `refundPegOut` — was never emitted at all,
+because `refundPegOut` makes no external call of its own. The one shape the
+feature was built for produced an unreachable candidate and hid the reachable
+one behind it.
+
+External calls are now attributed to the entry points that reach them, walking
+internal calls within the contract to a bounded depth. The helper is named in
+the edge, so the trace stays honest about where the call actually is:
+
+```
+PegOutContract.refundPegOut -> CollateralManagement.slashPegOutCollateral
+  via _transfer -> _collateralManagement.slashPegOutCollateral
+```
+
+Found by exercising the Build 010 artifact rather than the working tree.
+
+Tests: 256 passing (+3).
+
 ## Crystal V1.00 Build 010 — the pack that loaded, and was never asked
 
 Five defects from live use. Four of them shared a failure mode: a mechanism
