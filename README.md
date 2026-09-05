@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 013</h1>
+<h1 align="center">Crystal V1.00 Build 014</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -13,7 +13,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-290%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-375%20passing-brightgreen">
 </p>
 
 ---
@@ -89,7 +89,13 @@ pip install -e .                  # core only, regex fallback parsers
 ```
 
 **Crystal's core has zero dependencies.** tree-sitter is optional: without it
-Crystal degrades to regex parsers and says so, rather than failing.
+Crystal degrades to regex parsers and says so, rather than failing — and says
+what the degradation costs. The regex front-end does not resolve `import`
+statements, `using X for Y` bindings, user-defined value types or modifier
+bodies, so a receiver's type often cannot be identified. `parser_report()`
+carries `reduced_fidelity` and the list of limitations, and it reaches the scan
+output: a detector that stays quiet because it could not resolve a type must
+not read as a clean result.
 
 ---
 
@@ -140,7 +146,8 @@ Output formats: `json`, `markdown`, `sarif`, `arcadia`.
 | `unbounded-input-in-value-op` | a caller-chosen value with no upper bound reaches the amount position of a value operation |
 | `ignored-outcome-in-settlement` | a settlement frame is handed the operation's result, discards it, and moves value anyway |
 | `pipeline-guard-bypass` | one stage of a runtime pipeline moves value through a mechanism another stage's guard does not cover |
-| `asymmetric-side-effect` | two entry points of one contract reach the same state transition, one behind a revocable condition the other lacks — or a value operation omits a companion side-effect most equivalent paths include |
+| `asymmetric-side-effect` | two entry points of one contract reach the same state transition, one behind a revocable condition the other lacks. Graded by *coupling*: whether that condition speaks about the state the shared callee writes and the arguments it consumes |
+| `asymmetric-companion` | a value operation omits a companion call that most equivalent paths include. Its confidence is a **convention ratio**, not a defect confidence, and it is a separate detector because nothing establishes that a number from it is comparable to one from the detector above |
 
 Every signal carries a line-anchored ordered trace and a falsification list, and
 is `RESEARCH` status. None of them can produce a confirmed finding.

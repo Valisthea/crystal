@@ -7,7 +7,7 @@ from .campaigns import discover_packs, run_campaigns
 from .compiler.solc import compile_standard
 from .composition import build_composition
 from .detectors import run_detectors
-from .discovery import discover, profile
+from .discovery import discover, excluded_dir_reason, profile
 from .graphs.callgraph import build_call_graph
 from .graphs.cfg import build_cfg
 from .graphs.program import build_graph
@@ -55,9 +55,28 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
     # Fixtures are parsed and reported, but kept out of research. A mock runtime
     # produces state deltas and unguarded writes by design; leaving it in means
     # the only deltas Crystal reports are the test builder's.
-    test_contracts = [c for c in all_contracts if c.is_test]
+    # Scaffolding and superseded code leave research here, before anything is
+    # built from them — not afterwards. Filtering downstream left the state
+    # graph, the sequence candidates and the protocol model describing a
+    # different contract set than the report, and spent the 250-sequence budget
+    # on vendored code so that real sequences never reached research at all.
+    #
+    # The rule is by PATH, per contract. Excluding by name drops a live
+    # contract that merely shares a name with a superseded copy — `Quotes` and
+    # `SignatureValidator` exist in both `libraries/` and `legacy/` on a real
+    # target, and the live ones were being dropped with the legacy ones.
+    scaffolding = [] if include_tests else [
+        c for c in all_contracts if excluded_dir_reason(c.path)
+    ]
+    scaffolded = {id(c) for c in scaffolding}
+    test_contracts = [c for c in all_contracts if c.is_test] + scaffolding
     contracts = all_contracts if include_tests else [
-        c for c in all_contracts if not c.is_test
+        c for c in all_contracts
+        if not c.is_test and id(c) not in scaffolded
+    ]
+    excluded_scaffolding = [
+        {"contract": c.name, "path": c.path, "reason": excluded_dir_reason(c.path)}
+        for c in scaffolding
     ]
     # Base-contract state must be attributed to derived contracts before any
     # analysis runs, otherwise every inherited variable looks untouched.
@@ -132,6 +151,7 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
         "use_foundry": use_foundry,
         "all_contracts": all_contracts,
         "test_contracts": test_contracts,
+        "excluded_scaffolding": excluded_scaffolding,
         "include_tests": include_tests,
     }
     result = run_research(result)

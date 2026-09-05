@@ -7,6 +7,7 @@ keep parsing Crystal output unchanged.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
@@ -19,6 +20,21 @@ MAX_DETECTORS = 500
 MAX_DELTAS = 400
 MAX_ANOMALIES = 400
 MAX_COMPOSITIONS = 400
+
+# Markdown details the first few of each in full. Whatever it does not detail
+# it still counts, so a capped section says how much the JSON payload holds.
+MARKDOWN_DETECTOR_DETAILS = 40
+MARKDOWN_CANDIDATES_PER_CAMPAIGN = 5
+
+# Reason recorded for a contract the parser classified as a fixture while
+# parsing (`test/`, `mock/`, `*.t.sol`, a `Mock`/`Test` name or base). The
+# parser keeps only a flag; the research engine records a reason per contract
+# only for the directory rules it applies afterwards (`excluded_scaffolding`).
+PARSER_FIXTURE_REASON = "test fixture (parser classification)"
+
+# A detector that grades how tightly a differentiating guard is tied to the
+# shared call writes the grade into its evidence as `coupling [<grade>]: ...`.
+COUPLING_PREFIX = "coupling ["
 
 
 def _plain(value):
@@ -33,6 +49,83 @@ def _plain(value):
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+def _coupling_grade(evidence) -> str | None:
+    """The coupling grade a detector wrote into its evidence, or None.
+
+    `asymmetric-side-effect` grades a differentiating guard by what it is
+    about — state the shared callee writes, arguments it consumes — and the
+    grade sets the confidence band. It is lifted out of the evidence here so a
+    reader can sort on it without reading every line; nothing is inferred.
+    """
+    for line in evidence or ():
+        if isinstance(line, str) and line.startswith(COUPLING_PREFIX):
+            grade = line[len(COUPLING_PREFIX):].split("]", 1)[0].strip()
+            return grade or None
+    return None
+
+
+def _detector_payload(signal) -> dict:
+    record = asdict(signal)
+    # v2 addition: the grade beside the confidence it governs.
+    record["coupling"] = _coupling_grade(signal.evidence)
+    return record
+
+
+def _excluded_contracts(result) -> list[dict]:
+    """Every contract kept out of research, each with the reason it was.
+
+    Two mechanisms exclude a contract. The parser flags fixtures while parsing
+    and records no reason; the research engine then drops whole directories
+    (`legacy/`, `test-contracts/`) and records a reason per contract in
+    `excluded_scaffolding`. Joining the two gives the excluded bucket a reason
+    on every row, so no contract vanishes from research without saying why.
+    """
+    if result.get("include_tests"):
+        return []
+    scaffolding = result.get("excluded_scaffolding") or []
+    reasons = {
+        (entry["contract"], entry["path"]): entry["reason"]
+        for entry in scaffolding
+    }
+    rows = [
+        {
+            "contract": contract.name,
+            "path": str(contract.path),
+            "reason": reasons.get((contract.name, contract.path),
+                                  PARSER_FIXTURE_REASON),
+        }
+        for contract in result.get("test_contracts", [])
+    ]
+    # The engine files every directory exclusion under `test_contracts` as
+    # well; should that ever stop being true, the reason must still surface.
+    listed = {(row["contract"], row["path"]) for row in rows}
+    rows += [
+        {"contract": entry["contract"], "path": str(entry["path"]),
+         "reason": entry["reason"]}
+        for entry in scaffolding
+        if (entry["contract"], entry["path"]) not in listed
+    ]
+    return sorted(rows, key=lambda row: (row["contract"], row["path"]))
+
+
+def _relative(path, root) -> str:
+    """`path` relative to the scanned root when it lies beneath it, as POSIX.
+
+    Contract paths are absolute; the root is whatever the operator typed, so
+    both the literal and the resolved root are tried before giving up.
+    """
+    if not path:
+        return ""
+    target = Path(path)
+    if root:
+        for base in (Path(root), Path(root).resolve()):
+            try:
+                return target.relative_to(base).as_posix()
+            except (ValueError, OSError):
+                continue
+    return target.as_posix()
 
 
 def _contract_summaries(result):
@@ -79,12 +172,37 @@ def _campaign_payload(result) -> list[dict]:
     return out
 
 
+def _campaigns_selecting(campaigns) -> dict[tuple[str, ...], list[str]]:
+    """Every campaign that selected each chain, keyed by the chain.
+
+    The runner collapses a chain several campaigns selected onto one survivor
+    annotated with `selected_by_campaigns`; the hosting campaign is joined with
+    that annotation here. A payload built without the runner's pass (a single
+    campaign run on its own) still lists the chain under every campaign that
+    holds it, so the same aggregation is made from the payload itself.
+    """
+    selecting: dict[tuple[str, ...], list[str]] = {}
+    for campaign in campaigns:
+        for candidate in campaign["candidates"]:
+            names = selecting.setdefault(tuple(candidate["state_sequence"]), [])
+            for campaign_id in (campaign["campaign_id"],
+                                *(candidate.get("selected_by_campaigns") or ())):
+                if campaign_id not in names:
+                    names.append(campaign_id)
+    return selecting
+
+
 def _campaign_markdown(data) -> list[str]:
     """Render campaigns, including the ones that reported nothing.
 
     A campaign that found nothing is a result, not an absence: it says the
     scope was searched. Printing only the productive ones makes a pack that
     never loaded look identical to a pack that loaded and stayed quiet.
+
+    A chain is rendered once, however many campaigns selected it, and the
+    rendering names all of them. What a section does not detail — candidates
+    past the per-campaign cap, sequences the campaign deferred — is counted,
+    so nothing leaves the Markdown silently.
     """
     campaigns = data.get("campaign_results") or []
     packs = data.get("campaign_packs") or {}
@@ -104,8 +222,9 @@ def _campaign_markdown(data) -> list[str]:
     lines.append(
         f"{len(campaigns)} campaign(s) ran; {len(productive)} produced candidates."
     )
-    lines += ["", "| Campaign | Candidates | Explored | Pruned | Why pruned |",
-              "| --- | ---: | ---: | ---: | --- |"]
+    lines += ["", "| Campaign | Candidates | Deferred | Explored | Pruned "
+                  "| Why pruned |",
+              "| --- | ---: | ---: | ---: | ---: | --- |"]
     for campaign in campaigns:
         why = ", ".join(
             f"{rule}={count}"
@@ -113,27 +232,74 @@ def _campaign_markdown(data) -> list[str]:
         ) or "—"
         lines.append(
             f"| `{campaign['campaign_id']}` | {len(campaign['candidates'])} "
+            f"| {len(campaign.get('deferred') or [])} "
             f"| {campaign['total_sequences_explored']} "
             f"| {campaign['total_sequences_pruned']} | {why} |"
         )
 
+    # A warning on a campaign that reported nothing is the most important
+    # thing it has to say, so warnings are listed for every campaign.
+    warned = [c for c in campaigns if c.get("warning")]
+    if warned:
+        lines.append("")
+        for campaign in warned:
+            lines.append(f"- `{campaign['campaign_id']}` — {campaign['warning']}")
+
+    selecting = _campaigns_selecting(campaigns)
+    rendered: set[tuple[str, ...]] = set()
     for campaign in productive:
         lines += ["", f"### {campaign['campaign_name']} "
                       f"(`{campaign['campaign_id']}`)", ""]
         if campaign.get("warning"):
             lines.append(f"> {campaign['warning']}")
             lines.append("")
-        for candidate in campaign["candidates"][:5]:
+        shown = 0
+        elsewhere = 0
+        for candidate in campaign["candidates"]:
+            chain = tuple(candidate["state_sequence"])
+            if chain in rendered:
+                elsewhere += 1
+                continue
+            if shown >= MARKDOWN_CANDIDATES_PER_CAMPAIGN:
+                continue
+            rendered.add(chain)
+            shown += 1
             lines.append(
-                f"- **{' -> '.join(candidate['state_sequence'])}** — "
+                f"- **{' -> '.join(chain)}** — "
                 f"score {candidate['score']:.2f}, "
-                f"category `{candidate['category']}`"
+                f"confidence {candidate.get('confidence', 0.0):.2f}, "
+                f"category `{candidate['category']}`, "
+                f"validation `{candidate.get('validation_status') or 'n/a'}`"
             )
+            names = selecting.get(chain) or [campaign["campaign_id"]]
+            if len(names) > 1:
+                lines.append(
+                    f"  - selected by {len(names)} campaigns: "
+                    + ", ".join(f"`{name}`" for name in names)
+                )
             lines.append(f"  - {candidate['hypothesis']}")
             for item in list(candidate.get("evidence") or [])[:6]:
                 lines.append(f"  - {item}")
-            for question in list(candidate.get("questions") or [])[:4]:
+            for question in list(candidate.get("questions") or []):
                 lines.append(f"  - open question: {question}")
+        hidden = len(campaign["candidates"]) - shown - elsewhere
+        if hidden > 0:
+            lines.append(
+                f"- {hidden} more candidate(s) not detailed here; the JSON "
+                "payload carries every one."
+            )
+        if elsewhere:
+            lines.append(
+                f"- {elsewhere} candidate(s) already rendered under another "
+                "campaign above."
+            )
+        deferred = list(campaign.get("deferred") or [])
+        if deferred:
+            lines.append(
+                f"- {len(deferred)} lower-scored candidate(s) deferred past "
+                "the campaign's `max_candidates`; listed under `deferred` in "
+                "the JSON payload."
+            )
     return lines
 
 
@@ -209,6 +375,11 @@ def payload(result):
     concrete = result.get("concrete_validation", [])
     detectors = result.get("detectors", [])
     quality = result.get("quality_report")
+    # The engine's per-contract directory exclusions, verbatim. Empty when
+    # `--include-tests` restored everything to research.
+    scaffolding = [] if result.get("include_tests") else _plain(
+        result.get("excluded_scaffolding") or []
+    )
 
     return {
         "tool": "crystal",
@@ -270,10 +441,16 @@ def payload(result):
             if not result.get("include_tests") else 0,
             "contracts_parsed_total": len(result.get("all_contracts",
                                                      result["contracts"])),
+            # Of `test_contracts_excluded`, how many the directory rules
+            # (`legacy/`, `test-contracts/`) dropped after parsing.
+            "scaffolding_excluded": len(scaffolding),
         },
         "excluded_test_contracts": sorted(
             f"{c.name} ({Path(c.path).name})" for c in result.get("test_contracts", [])
         ) if not result.get("include_tests") else [],
+        # v2 additions: the same excluded bucket with a reason on every row.
+        "excluded_scaffolding": scaffolding,
+        "excluded_contracts": _excluded_contracts(result),
         "composition": _composition_payload(result.get("composition")),
         "finding_gate": _plain(result.get("finding_gate", {})),
         "evidence_records": [asdict(x) for x in result.get("evidence_records", [])],
@@ -300,7 +477,7 @@ def payload(result):
             asdict(x) for x in result["composition_candidates"][:MAX_COMPOSITIONS]
         ],
         # v2 additions.
-        "detectors": [asdict(x) for x in detectors[:MAX_DETECTORS]],
+        "detectors": [_detector_payload(x) for x in detectors[:MAX_DETECTORS]],
         "differential_candidates": [
             asdict(x) for x in result["differential_candidates"][:MAX_DETECTORS]
         ],
@@ -362,6 +539,118 @@ def _node(name: str) -> str:
     return "n_" + "".join(c if c.isalnum() else "_" for c in name)
 
 
+def _detector_markdown(data) -> list[str]:
+    """Every signal in one sortable table, then the first few in full.
+
+    The coupling grade is the discriminant that put a signal in its confidence
+    band; a reader triaging forty signals needs it beside the confidence, not
+    buried in the evidence of each one.
+    """
+    signals = data["detectors"]
+    lines = ["", "## Detector signals", ""]
+    if not signals:
+        lines += ["No structural detector produced a signal on this target.", ""]
+        return lines
+
+    lines += [
+        f"{len(signals)} signal(s). *Coupling* is the grade a detector gives "
+        "the guard that differentiates two paths to the same call — how "
+        "tightly it is tied to what that call does — and it sets the "
+        "confidence band; `—` means the detector does not grade.",
+        "",
+        "| # | Detector | Function | Confidence | Coupling | Location |",
+        "| ---: | --- | --- | ---: | --- | --- |",
+    ]
+    for index, signal in enumerate(signals, 1):
+        coupling = signal.get("coupling") or _coupling_grade(signal["evidence"])
+        location = f"{Path(signal['path']).name}:{signal['line']}" \
+            if signal["path"] else f"line {signal['line']}"
+        lines.append(
+            f"| {index} | `{signal['detector']}` "
+            f"| `{signal['contract']}.{signal['function']}` "
+            f"| {signal['confidence']} | {coupling or '—'} | `{location}` |"
+        )
+    if len(signals) > MARKDOWN_DETECTOR_DETAILS:
+        lines += ["", f"The first {MARKDOWN_DETECTOR_DETAILS} of {len(signals)} "
+                      "are detailed below; the table lists every one, and so "
+                      "does the JSON payload."]
+
+    for index, signal in enumerate(signals[:MARKDOWN_DETECTOR_DETAILS], 1):
+        coupling = signal.get("coupling") or _coupling_grade(signal["evidence"])
+        lines += [
+            "",
+            f"### {index}. {signal['title']}",
+            "",
+            f"- Detector: `{signal['detector']}` — confidence "
+            f"{signal['confidence']}"
+            + (f" — coupling `{coupling}`" if coupling else "")
+            + f" — status `{signal['status']}`",
+            f"- Location: `{signal['path']}:{signal['line']}`",
+            f"- Mechanism: {signal['reason']}",
+            "",
+            "Evidence:",
+            "",
+        ]
+        lines += [f"- {item}" for item in signal["evidence"]]
+        if signal["ordered_trace"]:
+            lines += ["", "Ordered trace:", "", "```"]
+            lines += list(signal["ordered_trace"])
+            lines.append("```")
+        if signal["falsification"]:
+            lines += ["", "Falsify this before believing it:", ""]
+            lines += [f"- {item}" for item in signal["falsification"]]
+    lines.append("")
+    return lines
+
+
+def _excluded_markdown(data) -> list[str]:
+    """Every contract kept out of research, with the reason, uncapped.
+
+    Fifty-two of sixty-nine contracts vanished from one real scan with a
+    forty-name list and no reason on any of them. The list is now a table
+    with a reason per row, and it is not truncated: an exclusion the operator
+    cannot see is one they cannot dispute.
+    """
+    rows = data.get("excluded_contracts")
+    if rows is None:
+        # A payload from before the reasons existed: the bare names.
+        names = data.get("excluded_test_contracts") or []
+        if not names:
+            return []
+        return ["## Excluded fixtures", "",
+                f"{len(names)} type(s) were classified as test fixtures and "
+                "kept out of research. Re-run with `--include-tests` to "
+                "research them anyway.", ""] + \
+            [f"- `{name}`" for name in names] + [""]
+    if not rows:
+        return []
+
+    by_reason = Counter(row["reason"] for row in rows)
+    parser_count = by_reason.pop(PARSER_FIXTURE_REASON, 0)
+    directory = ", ".join(
+        f"{count} {reason}" for reason, count in sorted(by_reason.items())
+    )
+    summary = (
+        f"{len(rows)} type(s) were parsed but kept out of research — "
+        f"{parser_count} classified as a test fixture by the parser"
+        + (f", {len(rows) - parser_count} by directory rule ({directory})"
+           if directory else "")
+        + ". A mock runtime mutates state and skips authority checks by "
+        "design, and a superseded copy duplicates the live logic. Re-run with "
+        "`--include-tests` to research them anyway."
+    )
+    lines = ["## Excluded fixtures", "", summary, "",
+             "| Contract | Path | Reason |", "| --- | --- | --- |"]
+    project = data.get("project", "")
+    for row in sorted(rows, key=lambda r: (r["reason"], r["contract"], r["path"])):
+        lines.append(
+            f"| `{row['contract']}` | `{_relative(row['path'], project)}` "
+            f"| {row['reason']} |"
+        )
+    lines.append("")
+    return lines
+
+
 def markdown(data, result=None) -> str:
     summary = data["summary"]
     lines = [
@@ -394,41 +683,8 @@ def markdown(data, result=None) -> str:
     ):
         lines.append(f"| {key.replace('_', ' ')} | {summary.get(key, 0)} |")
 
-    lines += ["", "## Detector signals", ""]
-    if not data["detectors"]:
-        lines.append("No structural detector produced a signal on this target.")
-    for signal in data["detectors"][:40]:
-        lines += [
-            f"### {signal['title']}",
-            "",
-            f"- Detector: `{signal['detector']}` — confidence "
-            f"{signal['confidence']} — status `{signal['status']}`",
-            f"- Location: `{signal['path']}:{signal['line']}`",
-            f"- Mechanism: {signal['reason']}",
-            "",
-            "Evidence:",
-            "",
-        ]
-        lines += [f"- {item}" for item in signal["evidence"]]
-        if signal["ordered_trace"]:
-            lines += ["", "Ordered trace:", "", "```"]
-            lines += list(signal["ordered_trace"])
-            lines.append("```")
-        if signal["falsification"]:
-            lines += ["", "Falsify this before believing it:", ""]
-            lines += [f"- {item}" for item in signal["falsification"]]
-        lines.append("")
-
-    if data.get("excluded_test_contracts"):
-        lines += [
-            "## Excluded fixtures", "",
-            f"{len(data['excluded_test_contracts'])} type(s) were classified as test "
-            "fixtures and kept out of research: a mock runtime mutates state and "
-            "skips authority checks by design. Re-run with `--include-tests` to "
-            "research them anyway.", "",
-        ]
-        lines += [f"- `{name}`" for name in data["excluded_test_contracts"][:40]]
-        lines.append("")
+    lines += _detector_markdown(data)
+    lines += _excluded_markdown(data)
 
     lines += ["## Contracts", "", "| Contract | Kind | Lang | Functions | Entry points | State | Signals |",
               "| --- | --- | --- | ---: | ---: | ---: | ---: |"]
@@ -640,6 +896,7 @@ def arcadia(data) -> dict:
             "languages": data["summary"]["languages"],
             "frameworks": data["summary"]["frameworks"],
             "contracts": data["contracts"],
+            "excluded_contracts": data.get("excluded_contracts", []),
             "parsers": data["parsers"],
             "parse_diagnostics": data["parse_diagnostics"],
         },

@@ -9,10 +9,10 @@ the relationships.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .. import ir as I
-from ..naming import StateNamespace, bare_name
+from ..naming import StateNamespace, bare_name, contract_of
 from .binding import build_bindings
 
 
@@ -154,6 +154,75 @@ class StateGraph:
             elif t.function == fn_b:
                 b_all |= t.reads | t.writes
         return a_all & b_all
+
+    def without_contracts(self, excluded) -> "StateGraph":
+        """A new graph with every element of the `excluded` contracts removed.
+
+        Research drops scaffolding and superseded code (`test-contracts/`,
+        `legacy/`, ...) *after* the graph is built, so without this the graph
+        is the one output still describing them: a report that counts causal
+        edges over code it says it excluded, an order-sensitivity pass whose
+        edge budget is spent on a vendored tree, a campaign matching edge
+        kinds nothing else can see. The copy describes the same contract set
+        as `result["contracts"]`:
+
+        * transitions of an excluded contract are dropped;
+        * causal edges with either endpoint in an excluded contract are
+          dropped;
+        * state nodes owned by an excluded contract are dropped, and the
+          writers/readers of the surviving nodes are pruned to surviving
+          functions. A node that only excluded functions touched goes with
+          them — `build_state_graph` would never have created it.
+
+        Contract identity is the *name*, the key every `Contract.function`
+        step and detector signal is already excluded by, so a live contract
+        that shares its name with an excluded copy is excluded here exactly as
+        it is everywhere else. Relative order is preserved throughout: sequence
+        generation, order sensitivity, composition and campaigns walk these
+        lists in order and budget by position, so the result is a stable
+        subsequence of each list, never a re-sort. A transition's own
+        reads/writes are its behaviour and are left untouched.
+        """
+        excluded = set(excluded)
+
+        def dropped(function: str) -> bool:
+            return _function_contract(function) in excluded
+
+        transitions = [
+            t for t in self.transitions
+            if (t.contract or _function_contract(t.function)) not in excluded
+        ]
+        causal_edges = [
+            e for e in self.causal_edges
+            if (e.source_contract or _function_contract(e.source)) not in excluded
+            and (e.target_contract or _function_contract(e.target)) not in excluded
+        ]
+        state_nodes: list[StateNode] = []
+        for node in self.state_nodes:
+            if (node.contract or contract_of(node.name)) in excluded:
+                continue
+            writers = tuple(f for f in node.writers if not dropped(f))
+            readers = tuple(f for f in node.readers if not dropped(f))
+            if (node.writers or node.readers) and not (writers or readers):
+                continue
+            if writers != node.writers or readers != node.readers:
+                node = replace(node, writers=writers, readers=readers)
+            state_nodes.append(node)
+        return StateGraph(
+            transitions=transitions,
+            causal_edges=causal_edges,
+            state_nodes=state_nodes,
+        )
+
+
+def _function_contract(qualified: str) -> str:
+    """`"Vault.deposit"` -> `"Vault"`: the contract half of a graph function name.
+
+    Graph functions are always `Contract.function`, whatever the source
+    language (the `::` namespace belongs to state names, not functions). A bare
+    name carries no contract and resolves to `""`.
+    """
+    return qualified.split(".", 1)[0] if "." in (qualified or "") else ""
 
 
 # ── Edge kind scoring ────────────────────────────────────────────────────

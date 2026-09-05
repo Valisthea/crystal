@@ -23,6 +23,19 @@ from crystal.detectors.asymmetric_side_effect import (
     detect,
 )
 from crystal.parsers import parse_project
+import pytest
+from crystal.parsers import solidity_ts, treesitter_enabled
+
+needs_solidity_treesitter = pytest.mark.skipif(
+    not treesitter_enabled() or not solidity_ts.available(),
+    reason=(
+        "needs the tree-sitter Solidity front-end: the regex fallback does not "
+        "resolve imports, `using for` bindings or user-defined value types, so "
+        "a receiver's type cannot be identified. See "
+        "crystal.parsers.SOLIDITY_REGEX_LIMITATIONS."
+    ),
+)
+
 
 # The strong shape: the guard relates state the callee WRITES (`stored`, read
 # back through the handle the call mutates) to an argument the callee CONSUMES
@@ -220,6 +233,7 @@ def test_a_guard_touching_neither_half_is_uncoupled(tmp_path):
 
 # -- the properties the bands exist to guarantee ---------------------------
 
+@needs_solidity_treesitter
 def test_guards_are_not_summed(tmp_path):
     """Three uncoupled guards must not outrank one coupled guard.
 

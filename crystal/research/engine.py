@@ -50,6 +50,10 @@ def _exclude_scaffolding(result):
     segment — but kept parsed and listed under the same excluded bucket the
     report already renders, with a per-contract reason, so the exclusion is
     visible and `--include-tests` restores them.
+
+    Everything anchored on the excluded contracts follows them out — sequence
+    hypotheses, detector signals, and the state graph, which was built before
+    this ran and would otherwise be the one output still describing them.
     """
     if result.get("include_tests"):
         return
@@ -95,8 +99,29 @@ def _exclude_scaffolding(result):
         and getattr(signal, "contract", None) not in excluded_names
     ]
 
+    # The graph was built from the unfiltered contract set (crystal/engine.py,
+    # before research). Composition, order sensitivity, campaigns and the
+    # report's causal-edge count all walk it, so it must describe the same
+    # contract set as `result["contracts"]` — otherwise the summary counts
+    # edges over code the same report says it excluded. Same identity as the
+    # two filters above: the contract name.
+    state_graph = result.get("state_graph")
+    if state_graph is not None:
+        result["state_graph"] = state_graph.without_contracts(excluded_names)
+
+    # The call graph was built from the same unfiltered set and is rendered
+    # one section above the state graph: a `legacy/` caller drawn there is the
+    # same contradiction. Same identity, order preserved.
+    result["call_graph"] = [
+        edge for edge in result.get("call_graph", [])
+        if not (_sequence_contracts((edge.source, edge.target)) & excluded_names)
+    ]
+
 
 def run_research(result):
+    # `crystal.engine.research` now excludes scaffolding before anything is
+    # built. This stays as a safety net for callers that assemble a result
+    # dict themselves, and is a no-op on the normal path.
     _exclude_scaffolding(result)
     contracts = result["contracts"]
     engine = result.get("symbolic_engine") or SymbolicEngine(contracts)

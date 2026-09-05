@@ -12,6 +12,7 @@ import inspect
 
 from . import (
     access_control,
+    asymmetric_companion,
     asymmetric_side_effect,
     first_depositor,
     ignored_outcome,
@@ -31,6 +32,7 @@ DETECTORS = {
     "pipeline-bypass": pipeline_guard_bypass,
     "ignored-outcome": ignored_outcome,
     "asymmetric-side-effect": asymmetric_side_effect,
+    "asymmetric-companion": asymmetric_companion,
 }
 
 __all__ = ["DETECTORS", "DetectorSignal", "collapse_signals", "detector_names",

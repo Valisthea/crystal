@@ -99,7 +99,8 @@ def analyze(source, name="T.sol", only=None):
 
 def test_detector_registry():
     assert detector_names() == [
-        "access-control", "asymmetric-side-effect", "first-depositor",
+        "access-control", "asymmetric-companion", "asymmetric-side-effect",
+        "first-depositor",
         "ignored-outcome", "oracle-manipulation", "pipeline-bypass",
         "reentrancy", "unbounded-input",
     ]
@@ -225,7 +226,7 @@ contract Vault {
 
 def test_asymmetric_side_effect_solidity():
     """_mint is called in three sites; _updateCheckpoint is in two but not depositFor."""
-    signals = analyze(ASYMMETRIC_SOLIDITY, only=["asymmetric-side-effect"])
+    signals = analyze(ASYMMETRIC_SOLIDITY, only=["asymmetric-companion"])
     assert signals, "detector must fire on the manifest Solidity asymmetry"
     flagged = {s.function for s in signals}
     assert "depositFor" in flagged
@@ -266,8 +267,8 @@ def test_asymmetric_side_effect_emits_a_signal():
     asserts only the detector's NAME, which is why a detector that could never
     emit shipped with a green suite.
     """
-    found = analyze(ASYMMETRIC_SETTLEMENT, only=["asymmetric-side-effect"])
-    assert found, "no asymmetric-side-effect signal"
+    found = analyze(ASYMMETRIC_SETTLEMENT, only=["asymmetric-companion"])
+    assert found, "no asymmetric-companion signal"
     best = max(found, key=lambda s: s.confidence)
     assert best.contract == "Settlement"
     assert best.function == "settleMinerFee"

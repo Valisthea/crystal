@@ -26,6 +26,12 @@ from ..models import (
     StateVar,
 )
 from .base import ParseResult
+from .solidity_types import (
+    EMPTY_CATALOG,
+    TypeCatalog,
+    catalog_from_paths,
+    catalog_from_text,
+)
 
 PARSER_NAME = "tree-sitter"
 
@@ -157,9 +163,10 @@ def _mapping_types(type_text: str) -> tuple[list[str], str]:
 class _FileParser:
     """Owns one source file and lowers it into Crystal records."""
 
-    def __init__(self, source: bytes, path: str):
+    def __init__(self, source: bytes, path: str, catalog: TypeCatalog | None = None):
         self.source = source
         self.path = path
+        self.catalog = catalog or EMPTY_CATALOG
         self.state_names: set[str] = set()
         self.unsupported: list[str] = []
         self.has_assembly = False
@@ -299,11 +306,38 @@ class _FileParser:
             if child.type == "call_argument"
         )
 
+    def is_conversion(self, call_node) -> bool:
+        """A `call_expression` that builds a struct or converts a value.
+
+        The grammar already keeps elementary casts (`address(x)`), `payable(x)`
+        and `type(T)` out of `call_expression`; what still arrives here spelled
+        as a call is a user type — `Exp({...})`, `CToken(addr)`, `Lib.S(1, 2)`
+        — and only the project's declarations can say so. `new C()` carries a
+        `new_expression` callee and is a real constructor call; `new T[](n)`
+        carries one too but only allocates memory.
+        """
+        callee = _unwrap(call_node.named_children[0]) if call_node.named_child_count else None
+        if callee is None:
+            return False
+        if callee.type == "identifier":
+            return self.catalog.is_conversion(self.text(callee))
+        if callee.type == "new_expression":
+            return self.flat(callee).endswith("]")
+        if callee.type == "member_expression" and callee.named_child_count == 2:
+            owner, member = callee.named_children
+            if owner.type == "identifier" and member.type == "identifier":
+                return self.catalog.is_qualified_conversion(
+                    self.text(owner), self.text(member)
+                )
+        return False
+
     def extract_call(self, node):
         node = _unwrap(node)
         if node is None:
             return None
-        if node.type != "call_expression":
+        if node.type != "call_expression" or self.is_conversion(node):
+            # Not a call itself; the call it may wrap is what matters —
+            # `Exp({mantissa: CToken(c).borrowIndex()})` reaches `borrowIndex`.
             for child in node.named_children:
                 found = self.extract_call(child)
                 if found is not None:
@@ -315,6 +349,13 @@ class _FileParser:
                         self.arguments(node), value)
 
     def _call_statement(self, node):
+        if self.is_conversion(node):
+            call = self.extract_call(node)
+            if call is None:
+                return I.IRStmt(I.UNKNOWN, self.line(node), self.flat(node),
+                                reads=self.state_in(node))
+            return I.IRStmt(I.CALL, self.line(node), self.flat(node), call=call,
+                            reads=self.state_in(node))
         callee = node.named_children[0] if node.named_child_count else None
         name, kind, receiver, value = classify_callee(self.text(callee))
         arguments = self.arguments(node)
@@ -659,24 +700,35 @@ class _FileParser:
         return contracts
 
 
-def parse_text(text: str, path: str) -> list[Contract]:
+def parse_text(text: str, path: str, catalog: TypeCatalog | None = None) -> list[Contract]:
+    """Lower one file. `catalog` carries the project's declared type names so a
+    cast to a contract declared elsewhere is not recorded as a call; the file's
+    own declarations are always known."""
     parser, _ = _load()
     if parser is None:
         return []
     source = text.encode("utf-8")
     tree = parser.parse(source)
-    return _FileParser(source, str(path)).run(tree.root_node)
+    known = catalog_from_text(text).merged(catalog)
+    return _FileParser(source, str(path), known).run(tree.root_node)
 
 
-def parse_file(path) -> list[Contract]:
-    return parse_text(Path(path).read_text(encoding="utf-8", errors="ignore"), str(path))
+def parse_file(path, catalog: TypeCatalog | None = None) -> list[Contract]:
+    return parse_text(
+        Path(path).read_text(encoding="utf-8", errors="ignore"), str(path), catalog
+    )
+
+
+# Project-wide declared names; `parse_project` builds this once per language.
+type_catalog = catalog_from_paths
 
 
 def parse_sources(paths) -> list[Contract]:
+    solidity = [path for path in paths if Path(path).suffix.lower() == ".sol"]
+    catalog = type_catalog(solidity)
     out: list[Contract] = []
-    for path in paths:
-        if Path(path).suffix.lower() == ".sol":
-            out.extend(parse_file(path))
+    for path in solidity:
+        out.extend(parse_file(path, catalog))
     return out
 
 

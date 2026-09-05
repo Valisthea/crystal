@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 
 from .. import ir as I
-from ..models import SOLIDITY, Contract, Function, Parameter, StateVar
+from ..models import SOLIDITY, Contract, ContractType, Function, Parameter, StateVar
 from .base import (
     ParseResult,
     base_identifier,
@@ -22,11 +22,68 @@ from .base import (
     split_arguments,
     strip_comments,
 )
+from .solidity_types import (
+    EMPTY_CATALOG,
+    TypeCatalog,
+    catalog_from_paths,
+    catalog_from_text,
+)
 
 CONTRACT_RE = re.compile(
-    r"\b(?:contract|abstract\s+contract|interface|library)\s+([A-Za-z_]\w*)"
+    r"\b(contract|abstract\s+contract|interface|library)\s+([A-Za-z_]\w*)"
     r"(?:\s+is\s+([^\{]+))?\s*\{", re.MULTILINE
 )
+
+# What follows a state variable's name when it is being written.
+#
+# The name may be followed by any chain of index or member accesses first —
+# `balances[msg.sender] -= x` and `pool.total += y` are writes to `balances`
+# and `pool`. Requiring the operator to sit immediately after the name missed
+# every indexed assignment, which in Solidity is most state writes: the regex
+# front-end reported empty `writes` for whole contracts, and everything keyed
+# on written state (the causal graph, symbolic deltas, coupling grading) came
+# out empty on the fallback path while looking healthy under tree-sitter.
+#
+# `=` must also not be the tail of `==`, `!=`, `<=` or `>=`; the old pattern
+# read a comparison as an assignment.
+_ACCESS_CHAIN = r"(?:\s*\[[^\]]*\]|\s*\.[A-Za-z_]\w*)*"
+_ASSIGN_TAIL = r"(?:(?:[+\-*/%&|^]|<<|>>)?=(?!=)|\+\+|--)"
+
+
+def _write_re(name: str) -> re.Pattern:
+    return re.compile(
+        r"\b" + re.escape(name) + _ACCESS_CHAIN + r"\s*" + _ASSIGN_TAIL
+    )
+
+
+# A local declaration's left-hand side carries a type before the name:
+# `uint256 stored`, `Quotes.PegOutQuote memory quote`, `address payable to`,
+# `(bool sent, bytes memory data)`. An assignment target never does — it is a
+# bare name, an index, or a member access, none of which contain a space at
+# top level.
+_DECL_LHS_RE = re.compile(
+    r"^[A-Za-z_][\w.]*(?:\s*\[\s*\])*"          # type, incl. arrays and Lib.Type
+    r"(?:\s+(?:memory|storage|calldata|payable))*"
+    r"\s+[A-Za-z_]\w*$"
+)
+
+
+def _is_declaration(lhs: str) -> bool:
+    cleaned = (lhs or "").strip()
+    if cleaned.startswith("("):
+        # A tuple destructuring declares whenever any element carries a type.
+        inner = cleaned[1:].rsplit(")", 1)[0]
+        return any(_DECL_LHS_RE.match(part.strip())
+                   for part in inner.split(",") if part.strip())
+    return bool(_DECL_LHS_RE.match(cleaned))
+
+
+def _declared_name(lhs: str) -> str:
+    """The name a declaration introduces. Tuples keep their whole shape."""
+    cleaned = (lhs or "").strip()
+    if cleaned.startswith("("):
+        return cleaned
+    return cleaned.rsplit(None, 1)[-1] if " " in cleaned else cleaned
 FUNCTION_RE = re.compile(
     r"\bfunction\s+([A-Za-z_]\w*)\s*\(([^)]*)\)([^{};]*)\{", re.MULTILINE
 )
@@ -43,6 +100,18 @@ VAR_RE = re.compile(
 VIS_RE = re.compile(r"\b(public|external|internal|private)\b")
 MUT_RE = re.compile(r"\b(view|pure|payable)\b")
 LOWLEVEL_RE = re.compile(r"\.(call|delegatecall|staticcall|transfer|send)\b")
+TYPE_DECL_RE = re.compile(r"\b(struct|enum)\s+([A-Za-z_]\w*)\s*\{")
+# A callee candidate: `name(`, `a.b.c(`, `foo{value: 1}(`.
+CALLEE_RE = re.compile(r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*(?:\{[^}]*\})?\s*\(")
+# What follows a closed argument list when the call chains outward:
+# `IFoo(x).bar(`, `foo(a)[0].bar{gas: 1}(`.
+CHAIN_RE = re.compile(r"\s*(?:\[[^\]]*\]\s*)*\.\s*([A-Za-z_]\w*)\s*(?:\{[^}]*\})?\s*\(")
+NEW_RE = re.compile(r"\bnew\s+$")
+# Words that can precede `(` in a statement without naming a callee.
+NOT_CALLEES = {
+    "if", "for", "while", "do", "return", "returns", "catch", "try", "else",
+    "emit", "revert", "delete", "unchecked", "assembly", "new",
+}
 
 MODIFIER_KEYWORDS = {
     "external", "public", "internal", "private", "view", "pure",
@@ -90,8 +159,42 @@ def _matching(text: str, opening: int, open_ch: str, close_ch: str) -> int:
     return n
 
 
-def _classify_call(text: str) -> tuple[str, str, str | None, bool]:
-    """Return (callee, kind, receiver, value_attached) for a call expression."""
+def _split_arguments(text: str) -> tuple[str, ...]:
+    """Split a call's argument text on top-level commas."""
+    parts, depth, current = [], 0, []
+    for char in text:
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    parts.append("".join(current))
+    return tuple(part.strip() for part in parts if part.strip())
+
+
+def _classify_call(text: str, catalog: TypeCatalog | None = None
+                   ) -> tuple[str, str, str | None, bool, tuple[str, ...]]:
+    """Return (callee, kind, receiver, value_attached, arguments).
+
+    The arguments are the call's own, as written. They were previously dropped,
+    which left `IRCall.arguments` empty on this front-end — so anything asking
+    what actually flows into a call (the coupling grade's argument half, the
+    "same arguments at both sites" test, the symbolic engine's call records)
+    silently had nothing to work with.
+
+    Casts and struct literals (`CToken(addr)`, `Exp({mantissa: x})`,
+    `uint256(x)`) are spelled like calls but call nothing; they are skipped on
+    the catalog's evidence and the search continues inside their arguments,
+    so `Exp({mantissa: CToken(c).borrowIndex()})` still yields `borrowIndex`.
+    A call that chains outward — `IFoo(x).bar(y)` — is reported as its
+    outermost member call with the inner expression as receiver, which is
+    what the tree-sitter front-end records for the same text.
+    """
+    catalog = catalog or EMPTY_CATALOG
     value_attached = "{value:" in text.replace(" ", "")
     low = LOWLEVEL_RE.search(text)
     if low:
@@ -104,28 +207,53 @@ def _classify_call(text: str) -> tuple[str, str, str | None, bool]:
             "transfer": I.VALUE_TRANSFER,
             "send": I.VALUE_TRANSFER,
         }[name]
-        return name, kind, receiver, value_attached or name in {"transfer", "send"}
-    match = re.search(r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*(?:\{[^}]*\})?\s*\(", text)
-    if not match:
-        return "", I.INTERNAL_CALL, None, value_attached
-    callee = match.group(1)
-    if "." in callee:
-        receiver, name = callee.rsplit(".", 1)
+        close = _matching(text, text.find("(", low.end() - 1), "(", ")")
+        opening = text.find("(", low.end() - 1)
+        arguments = _split_arguments(text[opening + 1:close - 1]) if close > 0 else ()
+        return (name, kind, receiver,
+                value_attached or name in {"transfer", "send"}, arguments)
+    for match in CALLEE_RE.finditer(text):
+        callee = match.group(1)
+        if callee in NOT_CALLEES:
+            continue
+        start = match.start(1)
+        creation = NEW_RE.search(text, 0, start)
+        receiver_start = creation.start() if creation else start
+        receiver, name = callee.rsplit(".", 1) if "." in callee else (None, callee)
+        close = _matching(text, match.end() - 1, "(", ")")
+        while True:
+            chain = CHAIN_RE.match(text, close)
+            if not chain:
+                break
+            receiver = " ".join(text[receiver_start:close].split())
+            name = chain.group(1)
+            close = _matching(text, chain.end() - 1, "(", ")")
+        if receiver is None:
+            # `new Foo(..)` runs a constructor; a conversion runs nothing.
+            if creation or not catalog.is_conversion(name):
+                return (name, I.INTERNAL_CALL, None, value_attached,
+                        _split_arguments(text[match.end():close - 1]))
+            continue
+        if catalog.is_qualified_conversion(receiver, name):
+            continue
         kind = I.INTERNAL_CALL if receiver in {"super", "this"} else I.EXTERNAL_CALL
-        return name, kind, receiver, value_attached
-    return callee, I.INTERNAL_CALL, None, value_attached
+        opening = text.rfind("(", 0, close)
+        return (name, kind, receiver, value_attached,
+                _split_arguments(text[opening + 1:close - 1]))
+    return "", I.INTERNAL_CALL, None, value_attached, ()
 
 
 class _StatementScanner:
     """Brace/paren aware statement splitter over comment-stripped source."""
 
     def __init__(self, raw: str, state_names: set[str], line_base: int,
-                 resolve_base=None):
+                 resolve_base=None, catalog: TypeCatalog | None = None):
         self.raw = raw
         self.scan = strip_comments(raw)
         self.state = state_names
         self.line_base = line_base
         self.resolve = resolve_base or base_identifier
+        self.catalog = catalog or EMPTY_CATALOG
         self.unsupported: list[str] = []
         self.has_assembly = False
 
@@ -272,7 +400,8 @@ class _StatementScanner:
             return self._simple(out, i, end)
         close = min(_matching(self.scan, bopen, "{", "}"), end)
         header = self.raw[i:bopen]
-        callee, kind, receiver, value = _classify_call(header)
+        callee, kind, receiver, value, arguments = _classify_call(
+            header, self.catalog)
         body = self.block(bopen + 1, close - 1)
         after = close
         while True:
@@ -288,7 +417,8 @@ class _StatementScanner:
         out.append(I.IRStmt(
             I.CALL, self.line(i), self.text(i, bopen), body=body, note="try",
             call=I.IRCall(callee, kind or I.EXTERNAL_CALL, self.line(i),
-                          self.text(i, bopen), receiver, (), value),
+                          self.text(i, bopen), receiver,
+                          self._args(arguments, self.line(i)), value),
         ))
         return after
 
@@ -305,6 +435,9 @@ class _StatementScanner:
             "expression", text.strip()[:400], self.resolve(text),
             identifiers=identifiers_in(text), line=line,
         )
+
+    def _args(self, arguments, line: int) -> tuple[I.IRExpr, ...]:
+        return tuple(self._expr(text, line) for text in arguments)
 
     def _state_in(self, text: str) -> tuple[str, ...]:
         found = set(identifiers_in(text)) & self.state
@@ -343,12 +476,24 @@ class _StatementScanner:
                 reads |= set(self._state_in(lhs))
             call = None
             if "(" in rhs:
-                callee, kind, receiver, value = _classify_call(rhs)
+                callee, kind, receiver, value, arguments = _classify_call(
+                    rhs, self.catalog)
                 if callee:
-                    call = I.IRCall(callee, kind, line, text, receiver, (), value)
+                    call = I.IRCall(callee, kind, line, text, receiver,
+                                    self._args(arguments, line), value)
+            # `uint256 stored = _ledger.held(who)` declares a local; `stored = …`
+            # assigns to one. Emitting ASSIGN for both loses the fact that the
+            # local was *introduced by* that call, which is how a reader learns
+            # that a later `stored < amount` is talking about `_ledger`.
+            declared = _is_declaration(lhs)
+            kind_of_statement = I.VAR_DECL if declared else I.ASSIGN
+            # The target of a declaration is the name it introduces, not the
+            # type that precedes it: a reader asking "where did `stored` come
+            # from?" looks up `stored`, never `uint256 stored`.
+            target_text = _declared_name(lhs) if declared else lhs
             return I.IRStmt(
-                I.ASSIGN, line, text,
-                target=self._expr(lhs, line), operator=op,
+                kind_of_statement, line, text,
+                target=self._expr(target_text, line), operator=op,
                 value=self._expr(rhs, line), call=call,
                 writes=(base,) if base in self.state else (),
                 reads=tuple(sorted(reads)),
@@ -368,11 +513,13 @@ class _StatementScanner:
             )
 
         if "(" in raw:
-            callee, kind, receiver, value = _classify_call(raw)
+            callee, kind, receiver, value, arguments = _classify_call(
+                raw, self.catalog)
             if callee:
                 return I.IRStmt(
                     I.CALL, line, text,
-                    call=I.IRCall(callee, kind, line, text, receiver, (), value),
+                    call=I.IRCall(callee, kind, line, text, receiver,
+                                  self._args(arguments, line), value),
                     reads=self._state_in(raw),
                 )
         return I.IRStmt(I.UNKNOWN, line, text, reads=self._state_in(raw))
@@ -409,8 +556,9 @@ def _constant_loop_bound(header: str) -> int | None:
 
 
 def build_ir(body: str, state_names: set[str], line_base: int,
-             resolve_base=None) -> I.IRFunctionBody:
-    scanner = _StatementScanner(body, set(state_names), line_base, resolve_base)
+             resolve_base=None, catalog: TypeCatalog | None = None) -> I.IRFunctionBody:
+    scanner = _StatementScanner(body, set(state_names), line_base, resolve_base,
+                                catalog)
     statements = scanner.statements()
     return I.IRFunctionBody(
         statements=statements,
@@ -421,7 +569,7 @@ def build_ir(body: str, state_names: set[str], line_base: int,
 
 
 def _special(contract, name, kind, params_text, tail, body, start, line,
-             state_names, path, visibility):
+             state_names, path, visibility, catalog=None):
     """Build a constructor / receive / fallback record."""
     opening = body.find("{", start)
     end = matching_brace(body, opening)
@@ -429,10 +577,7 @@ def _special(contract, name, kind, params_text, tail, body, start, line,
     declared = line + 1 + body.count("\n", 0, start)
 
     reads = {n for n in state_names if re.search(r"\b" + re.escape(n) + r"\b", inner)}
-    writes = {
-        n for n in state_names
-        if re.search(r"\b" + re.escape(n) + r"\s*(?:[+\-*/]?=|\+\+|--)", inner)
-    }
+    writes = {n for n in state_names if _write_re(n).search(inner)}
     mm = MUT_RE.search(tail)
     function = Function(
         contract.name, name, visibility, mm.group(1) if mm else "stateful",
@@ -448,22 +593,53 @@ def _special(contract, name, kind, params_text, tail, body, start, line,
     function.payable = "payable" in tail
     function.end_line = line + 1 + body.count("\n", 0, end)
     function.ir = build_ir(
-        inner, state_names, line + 1 + body.count("\n", 0, opening)
+        inner, state_names, line + 1 + body.count("\n", 0, opening),
+        catalog=catalog,
     )
     return function
 
 
-def parse_text(text: str, path: str) -> list[Contract]:
+def _user_types(body: str, line: int) -> list[ContractType]:
+    """Struct and enum declarations of one contract body.
+
+    Read from comment-stripped text (same length, same offsets) so a struct
+    mentioned in a comment does not become a type.
+    """
+    scan = strip_comments(body)
+    types: list[ContractType] = []
+    for tm in TYPE_DECL_RE.finditer(scan):
+        kind, name = tm.group(1), tm.group(2)
+        close = matching_brace(scan, tm.end() - 1)
+        inner = scan[tm.end():close - 1]
+        separator = ";" if kind == "struct" else ","
+        members = [" ".join(m.split()) for m in inner.split(separator) if m.strip()]
+        types.append(ContractType(
+            name, kind, members, line + 1 + body.count("\n", 0, tm.start()),
+        ))
+    return types
+
+
+def parse_text(text: str, path: str, catalog: TypeCatalog | None = None) -> list[Contract]:
+    """Parse one file. `catalog` carries the project's declared type names so a
+    cast to a contract declared elsewhere is not recorded as a call; the file's
+    own declarations are always known."""
     result: list[Contract] = []
+    catalog = catalog_from_text(text).merged(catalog)
 
     for cm in CONTRACT_RE.finditer(text):
         brace = text.find("{", cm.start())
         end = matching_brace(text, brace)
         body = text[brace + 1:end - 1]
         line = text.count("\n", 0, cm.start())
-        bases = [x.strip().split()[0] for x in (cm.group(2) or "").split(",") if x.strip()]
-        contract = Contract(cm.group(1), str(path), line + 1, bases=bases,
+        bases = [x.strip().split()[0] for x in (cm.group(3) or "").split(",") if x.strip()]
+        # The declaring keyword decides the kind. Reporting an `interface` as a
+        # `contract` makes it its own implementation in `build_bindings`, which
+        # halves the confidence of every declared-type binding and disables the
+        # cross-contract composition the tree-sitter path produces — silently,
+        # because the fallback parser is exactly where nobody is watching.
+        contract = Contract(cm.group(2), str(path), line + 1, bases=bases,
                             language=SOLIDITY, parser="regex")
+        contract.kind = " ".join(cm.group(1).split())
         contract.end_line = text.count("\n", 0, end) + 1
 
         for vm in VAR_RE.finditer(body):
@@ -476,6 +652,7 @@ def parse_text(text: str, path: str) -> list[Contract]:
                 ))
 
         state_names = {v.name for v in contract.state_vars}
+        contract.types = _user_types(body, line)
 
         for fm in FUNCTION_RE.finditer(body):
             opening = body.find("{", fm.start())
@@ -489,10 +666,7 @@ def parse_text(text: str, path: str) -> list[Contract]:
                 n for n in state_names
                 if re.search(r"\b" + re.escape(n) + r"\b", fbody)
             }
-            writes = {
-                n for n in state_names
-                if re.search(r"\b" + re.escape(n) + r"\s*(?:[+\-*/]?=|\+\+|--)", fbody)
-            }
+            writes = {n for n in state_names if _write_re(n).search(fbody)}
             calls = []
             if LOWLEVEL_RE.search(fbody):
                 calls.append("<low-level-call>")
@@ -524,7 +698,8 @@ def parse_text(text: str, path: str) -> list[Contract]:
             function.payable = "payable" in tail
             function.end_line = line + 1 + body.count("\n", 0, fend)
             function.ir = build_ir(
-                fbody, state_names, line + 1 + body.count("\n", 0, opening)
+                fbody, state_names, line + 1 + body.count("\n", 0, opening),
+                catalog=catalog,
             )
             contract.functions.append(function)
 
@@ -535,13 +710,13 @@ def parse_text(text: str, path: str) -> list[Contract]:
             contract.functions.append(_special(
                 contract, "constructor", "constructor", cm2.group(1),
                 cm2.group(2) or "", body, cm2.start(), line, state_names, path,
-                visibility="public",
+                visibility="public", catalog=catalog,
             ))
         for fm2 in FALLBACK_RE.finditer(body):
             contract.functions.append(_special(
                 contract, fm2.group(1), fm2.group(1), "", fm2.group(2) or "",
                 body, fm2.start(), line, state_names, path,
-                visibility="external",
+                visibility="external", catalog=catalog,
             ))
 
         for mm in MODIFIER_RE.finditer(body):
@@ -563,7 +738,8 @@ def parse_text(text: str, path: str) -> list[Contract]:
             modifier.path = str(path)
             modifier.end_line = line + 1 + body.count("\n", 0, mend)
             modifier.ir = build_ir(
-                mbody, state_names, line + 1 + body.count("\n", 0, opening)
+                mbody, state_names, line + 1 + body.count("\n", 0, opening),
+                catalog=catalog,
             )
             contract.modifier_definitions.append(modifier)
 
@@ -572,17 +748,21 @@ def parse_text(text: str, path: str) -> list[Contract]:
     return result
 
 
-def parse_file(path) -> list[Contract]:
+def parse_file(path, catalog: TypeCatalog | None = None) -> list[Contract]:
     text = Path(path).read_text(encoding="utf-8", errors="ignore")
-    return parse_text(text, str(path))
+    return parse_text(text, str(path), catalog)
+
+
+# Project-wide declared names; `parse_project` builds this once per language.
+type_catalog = catalog_from_paths
 
 
 def parse_sources(paths) -> list[Contract]:
+    solidity = [path for path in paths if Path(path).suffix.lower() == ".sol"]
+    catalog = type_catalog(solidity)
     result: list[Contract] = []
-    for path in paths:
-        if Path(path).suffix.lower() != ".sol":
-            continue
-        result.extend(parse_file(path))
+    for path in solidity:
+        result.extend(parse_file(path, catalog))
     return result
 
 

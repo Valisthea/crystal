@@ -1,5 +1,116 @@
 # Changelog
 
+## Crystal V1.00 Build 014 — the fallback nobody was watching
+
+Three residues on the coupling grade, five parallel improvements, and one
+regression that had been shipping silently for four builds.
+
+**The regex fallback had been broken since Build 010.** The README promises
+that without tree-sitter Crystal "degrades to regex parsers and says so, rather
+than failing". It was failing, quietly: 16 of its own tests were red on
+`CRYSTAL_NO_TREESITTER=1`. Everything built since Build 010 — declared-type
+binding, cross-contract `call-flow` edges, the guard-asymmetry detector, the
+whole coupling grade — produced nothing at all on the fallback path. The suite
+was last run that way at Build 009 and not since. Three parser defects, each
+one enough on its own:
+
+* `interface X {}` was recorded with `kind="contract"`, so an interface became
+  its own implementation and every declared-type binding's confidence halved.
+* State writes were matched with the assignment operator required *immediately*
+  after the name, so `balances[msg.sender] -= x` and `pool.total = y` were not
+  writes. Whole contracts reported empty `writes`. The same pattern read
+  `x == y` as an assignment.
+* A local declaration was emitted as `assign`, not `var_decl`, and carried
+  `uint256 stored` as its target instead of `stored`, so nothing could learn
+  that a local came *from* a particular call.
+
+**Two shapes stopped sharing one scale.** `asymmetric-side-effect` emitted a
+guard asymmetry and a missing-companion asymmetry on one ranking, where an
+unevaluated companion at 0.833 outranked the only known true defect at 0.770.
+The natural analogue of coupling for the companion shape — does the absent
+companion touch the state the primary operation writes? — turns out to be
+unanswerable in practice: measured across two protocols, the primary operation
+is an inherited `_burn`, an interface method with no body, or an ERC-20 outside
+the scanned tree. It could not be calibrated, so it was separated instead, into
+`asymmetric-companion`, and now says what its number means: a convention ratio,
+not a defect confidence. `unresolved` and `uncoupled` are reported as different
+claims, because they are.
+
+**Every demotion names what failed to couple**, not only what coupled:
+
+```
+coupling [partially-coupled]: guard coupled only to the argument(s) cToken;
+its subject borrowGuardianPaused is neither read nor written by
+distributeBorrowerComp (compAccrued, compBorrowerIndex) — a precondition of
+the calling function, not a guard on the callee's effect
+```
+
+**Casts and struct literals are no longer calls.** `Exp({mantissa: ...})` was
+recorded as a callee, and two entry points were reported as sharing a "state
+transition" that was a struct construction. Worse, the extractor kept only the
+outermost expression, so the real external call inside — `CToken(cToken)
+.borrowIndex()` — was lost entirely. Excluding conversions by what the project
+declares recovers 8 real external calls on one target while removing 108
+non-calls. A name the project declares as both a type and a function stays a
+call; a name declared nowhere stays a call. No evidence, no guess.
+
+**`reentrancy-ordering` resolves what actually transfers control.** A call
+reaches attacker code only if its receiver resolves to an address, an
+interface, or a library whose body makes such a call. Flyover 5 → 2, Strata
+22 → 18, and a `Math.min` no longer reads as re-entrancy.
+
+**Scaffolding leaves research once, by path, before anything is built.** It was
+being filtered afterwards, and by contract *name* — so `Quotes` and
+`SignatureValidator`, which exist in both `libraries/` and `legacy/`, had their
+live copies dropped along with the dead ones. And because the 250-sequence cap
+was spent on the unfiltered graph, only 94 live candidates reached research;
+now all 250 do.
+
+**The graph agrees with the report.** State transitions, nodes, causal edges
+and the call graph no longer describe contracts the same report says were
+excluded: 460 → 226 transitions, 319 → 88 edges, 161 → 52 nodes, all excluded
+counts now zero. `--include-tests` restores them element for element.
+
+**Exclusions are visible.** All 59 excluded contracts carry a per-contract
+reason in JSON, Markdown and the Arcadia hand-off; Markdown had been listing 40
+and dropping 19 in silence. The published JSON schema was missing six top-level
+keys, `composition` among them, present since Build 005.
+
+**`crystal doctor` reports build drift.** The editable install has been observed
+pointing at extracted ZIP snapshots frozen several builds behind the repo —
+five of them accumulated in one day, and two live bugs were re-reported after
+being fixed because the scan ran an old copy. Doctor now names the package
+location, whether it sits in a git checkout, HEAD, whether the build matches,
+and whether pip's editable target is somewhere else entirely. Drift is a
+warning, never a failure: the exit code is unchanged.
+
+| on the three reference protocols | Build 013 | Build 014 |
+| --- | ---: | ---: |
+| Flyover, the true defect | 0.770 | **0.770** |
+| CapyFi, deliberate asymmetry | 0.440 | **0.440** |
+| Strata, uncoupled guards | 0.440 | **0.440** |
+| asymmetry signals, all three | 1 / 8 / 30 | **1 / 8 / 31** |
+| reentrancy signals, all three | 5 / 2 / 22 | **2 / 2 / 18** |
+| regex-fallback test failures | 16 | **0** |
+
+Ranking unchanged and still founded; recall unchanged and one signal gained.
+`confirmed_findings` is still 0, still unreachable by machine.
+
+The fallback is green again, but not at parity, and the difference is now
+stated rather than implied. Eleven of the sixteen failures were the four parser
+defects above. The remaining five, plus four of the new reentrancy tests, need
+language features the regex front-end does not model at all — `import`
+resolution, `using X for Y`, user-defined value types, modifier bodies — so a
+receiver's type cannot be identified there. Those nine tests are skipped on
+that path with that reason, and `parser_report()` now carries a
+`reduced_fidelity` flag and the list of limitations, so a report produced on
+the fallback says which conclusions it is not entitled to draw. Naming the
+parser was never the same as naming what using it costs: a detector that stays
+quiet because it could not resolve a type looks exactly like a clean result.
+
+Tests: 375 passing (+85). On `CRYSTAL_NO_TREESITTER=1`: 365 passing, 10 skipped,
+0 failing — the first green fallback run since Build 009.
+
 ## Crystal V1.00 Build 013 — the score that disagreed with the evidence beside it
 
 Build 012's `asymmetric-side-effect` was measured against three unrelated public

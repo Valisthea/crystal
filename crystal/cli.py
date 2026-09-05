@@ -6,10 +6,14 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import time
+from importlib import metadata as importlib_metadata
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from . import __build__, __release__, __version__, process
 from .backends import backend_names, capabilities as backend_capabilities, run_backend
@@ -48,6 +52,10 @@ CAPABILITIES = [
     "asymmetric-side-effect-detector", "enriched-causal-graph",
     "campaign-cli", "ens-preset",
     "cross-contract-state-namespacing",
+    # v3.1
+    "guard-asymmetry-coupling-grade", "companion-asymmetry-detector",
+    "type-aware-call-extraction", "control-transfer-resolution",
+    "scaffolding-exclusion-by-path", "build-drift-detection",
 ]
 
 LANGUAGES = {"solidity": SOLIDITY, "rust": RUST, "move": MOVE, "vyper": VYPER}
@@ -145,6 +153,229 @@ def _tool_version(executable: str, *args: str) -> tuple[bool, str]:
     return True, probe.first_line() or "installed"
 
 
+# Build drift. The package is pip-installed editable, and the install target
+# has been observed drifting to extracted ZIP snapshots frozen several builds
+# behind the repo. Scans then run stale code for hours and nothing says so.
+# Doctor therefore reports where the running package comes from, whether that
+# place is a git checkout, and whether the running build matches HEAD. Every
+# fact below is observed; when git is missing or fails the field degrades to
+# None with the reason recorded, and doctor never crashes over it.
+
+_BUILD_PATTERN = re.compile(r"""^__build__\s*=\s*["']([^"']*)["']""", re.MULTILINE)
+_DISTRIBUTION = "crystal-security-engine"
+_GIT_TIMEOUT = 15
+
+
+def _nearest_git_entry(path: Path) -> Path | None:
+    """Closest directory at or above `path` holding a `.git` entry.
+
+    A `.git` *file* counts: linked worktrees and `--separate-git-dir` checkouts
+    keep a pointer file where a plain clone keeps a directory.
+    """
+    for candidate in (path, *path.parents):
+        try:
+            if (candidate / ".git").exists():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _declared_build(text: str) -> str | None:
+    match = _BUILD_PATTERN.search(text)
+    return match.group(1) if match else None
+
+
+def _failure(result: process.ProcessResult) -> str:
+    return result.first_line() or result.error or "no output"
+
+
+def source_report(location: Path | None = None, build: str = __build__) -> dict:
+    """Where the imported package lives and whether it drifted from HEAD.
+
+    `kind` is `checkout` (inside a git working tree and tracked by it),
+    `snapshot` (an extracted archive: no working tree, or dropped untracked
+    inside somebody else's), or `unknown` when git could not answer; `reason`
+    then says why. Only `process.run` touches git, so a missing or failing
+    binary degrades to None fields instead of an exception.
+    """
+    location = location or Path(__file__).resolve().parent
+    info = {
+        "kind": "unknown",
+        "git_root": None,
+        "head": None,
+        "dirty": None,
+        "modified_files": None,
+        "head_build": None,
+        "build_matches": None,
+        "reason": None,
+    }
+    reasons: list[str] = []
+
+    git = shutil.which("git")
+    if git is None:
+        root = _nearest_git_entry(location)
+        if root is None:
+            info["kind"] = "snapshot"
+            reasons.append("git is not installed; judged from the missing .git "
+                           "entry above the package")
+        else:
+            info["kind"] = "checkout"
+            info["git_root"] = str(root)
+            reasons.append("git is not installed; HEAD, working-tree state and "
+                           "build match cannot be read")
+        info["reason"] = "; ".join(reasons)
+        return info
+
+    probe = process.run(
+        [git, "rev-parse", "--is-inside-work-tree", "--show-toplevel", "--show-prefix"],
+        cwd=location, timeout=_GIT_TIMEOUT,
+    )
+    if not probe.ok:
+        info["reason"] = f"git rev-parse did not run: {probe.error}"
+        return info
+    if probe.returncode != 0 or not probe.stdout.startswith("true"):
+        if _nearest_git_entry(location) is None:
+            info["kind"] = "snapshot"
+            info["reason"] = "no git working tree above the package"
+        else:
+            info["reason"] = f"git cannot read the working tree: {_failure(probe)}"
+        return info
+    lines = probe.stdout.split("\n")
+    root = lines[1].strip() if len(lines) > 1 else ""
+    prefix = lines[2].strip() if len(lines) > 2 else ""
+    info["git_root"] = str(Path(root)) if root else None
+
+    tracked = process.run(
+        [git, "ls-files", "--error-unmatch", "--", "__init__.py"],
+        cwd=location, timeout=_GIT_TIMEOUT,
+    )
+    if tracked.ok and tracked.returncode != 0:
+        info["kind"] = "snapshot"
+        info["reason"] = (f"inside the git working tree at {info['git_root']} but "
+                          f"not tracked by it: an extracted snapshot dropped inside "
+                          f"another repository")
+        return info
+    info["kind"] = "checkout"
+    if not tracked.ok:
+        reasons.append(f"tracking could not be verified: {tracked.error}")
+
+    head = process.run([git, "rev-parse", "--short", "HEAD"],
+                       cwd=location, timeout=_GIT_TIMEOUT)
+    if head.ok and head.returncode == 0 and head.stdout.strip():
+        info["head"] = head.stdout.strip()
+    else:
+        reasons.append(f"HEAD unreadable: {_failure(head)}")
+
+    status = process.run([git, "status", "--porcelain", "--untracked-files=no"],
+                         cwd=location, timeout=_GIT_TIMEOUT)
+    if status.ok and status.returncode == 0:
+        changed = [line for line in status.stdout.splitlines() if line.strip()]
+        info["dirty"] = bool(changed)
+        info["modified_files"] = len(changed)
+    else:
+        reasons.append(f"working-tree state unreadable: {_failure(status)}")
+
+    if info["head"]:
+        shown = process.run([git, "show", f"HEAD:{prefix}__init__.py"],
+                            cwd=location, timeout=_GIT_TIMEOUT)
+        if shown.ok and shown.returncode == 0:
+            info["head_build"] = _declared_build(shown.stdout)
+            if info["head_build"] is None:
+                reasons.append("HEAD's __init__.py declares no __build__")
+            else:
+                info["build_matches"] = info["head_build"] == build
+        else:
+            reasons.append(f"HEAD's __init__.py unreadable: {_failure(shown)}")
+
+    info["reason"] = "; ".join(reasons) or None
+    return info
+
+
+def install_report(location: Path | None = None) -> dict:
+    """Where pip believes the package lives.
+
+    An editable install records its target in `direct_url.json`. Reporting it
+    beside the imported location exposes the case this run cannot see from the
+    inside: `python -m crystal.cli` picked up the checkout from the working
+    directory while the `crystal` command still runs a stale target.
+    """
+    location = location or Path(__file__).resolve().parent
+    info = {
+        "distribution": _DISTRIBUTION,
+        "editable": None,
+        "target": None,
+        "target_build": None,
+        "covers_location": None,
+        "reason": None,
+    }
+    try:
+        distribution = importlib_metadata.distribution(_DISTRIBUTION)
+    except importlib_metadata.PackageNotFoundError:
+        info["reason"] = ("not pip-installed: the package was imported from "
+                          "sys.path (working directory or PYTHONPATH)")
+        return info
+    try:
+        raw = distribution.read_text("direct_url.json")
+    except OSError as exc:
+        info["reason"] = f"direct_url.json unreadable: {exc}"
+        return info
+    if not raw:
+        info["reason"] = ("no direct_url.json recorded: installed from an index, "
+                          "or by a tool other than pip")
+        return info
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        info["reason"] = f"direct_url.json unparseable: {exc}"
+        return info
+    info["editable"] = bool((data.get("dir_info") or {}).get("editable"))
+    url = data.get("url") or ""
+    if not url.startswith("file:"):
+        info["reason"] = f"installed from {url or 'an unrecorded source'}"
+        return info
+    target = Path(url2pathname(urlparse(url).path))
+    info["target"] = str(target)
+    init = target / "crystal" / "__init__.py"
+    try:
+        if init.is_file():
+            info["target_build"] = _declared_build(init.read_text(encoding="utf-8"))
+        info["covers_location"] = location.resolve().is_relative_to(target.resolve())
+    except OSError as exc:
+        info["reason"] = f"target unreadable: {exc}"
+    return info
+
+
+def drift_warnings(crystal: dict) -> list[str]:
+    """Human-readable drift warnings derived from `source` and `install`.
+
+    Warnings only: doctor's exit code reflects readiness, never drift.
+    """
+    source, install = crystal["source"], crystal["install"]
+    build, location = crystal["build"], crystal["location"]
+    warnings = []
+    if source["kind"] == "snapshot":
+        warnings.append(
+            f"build {build} at {location} is a snapshot, not a checkout: it "
+            f"cannot self-update and will not track the repo. Reinstall from the "
+            f"git checkout (pip install -e <checkout>) to run current code."
+        )
+    elif source["kind"] == "checkout" and source["build_matches"] is False:
+        detail = " (uncommitted local edits)" if source["dirty"] else ""
+        warnings.append(
+            f"running build {build} but HEAD {source['head']} declares build "
+            f"{source['head_build']}{detail}."
+        )
+    if install["editable"] and install["target"] and install["covers_location"] is False:
+        target_build = install["target_build"] or "unknown"
+        warnings.append(
+            f"pip's editable install points at {install['target']} (build "
+            f"{target_build}), not at this run's location: the `crystal` command "
+            f"runs that copy, not this code."
+        )
+    return warnings
+
+
 def environment_report() -> dict:
     python_ok = sys.version_info >= (3, 10)
     tools = {
@@ -164,10 +395,15 @@ def environment_report() -> dict:
     blocking = []
     if not python_ok:
         blocking.append(f"Python {sys.version.split()[0]} < 3.10")
+    location = Path(__file__).resolve().parent
+    crystal = {
+        "version": __version__, "build": __build__, "release": __release__,
+        "location": str(location),
+        "source": source_report(location),
+        "install": install_report(location),
+    }
     return {
-        "crystal": {"version": __version__, "build": __build__,
-                    "release": __release__,
-                    "location": str(Path(__file__).resolve().parent)},
+        "crystal": crystal,
         "python": {"version": sys.version.split()[0], "ok": python_ok,
                    "executable": sys.executable},
         "parsers": parsers,
@@ -179,14 +415,59 @@ def environment_report() -> dict:
             for name, item in backend_capabilities().items()
         },
         "blocking": blocking,
+        "warnings": drift_warnings(crystal),
         "ready": not blocking,
     }
+
+
+def _print_source(crystal: dict) -> None:
+    source, install = crystal["source"], crystal["install"]
+    if source["kind"] == "checkout":
+        print(f"  source              git checkout at {source['git_root']}")
+        if source["head"]:
+            if source["dirty"] is None:
+                state = "working-tree state unknown"
+            elif source["dirty"]:
+                state = f"dirty: {source['modified_files']} modified file(s)"
+            else:
+                state = "clean"
+            print(f"  head                {source['head']} ({state})")
+        else:
+            print("  head                unknown")
+        if source["build_matches"] is True:
+            print(f"  build vs HEAD       matches (HEAD declares build "
+                  f"{source['head_build']})")
+        elif source["build_matches"] is False:
+            print(f"  build vs HEAD       DIFFERS: running {crystal['build']}, "
+                  f"HEAD declares {source['head_build']}")
+        else:
+            print("  build vs HEAD       unknown")
+        if source["reason"]:
+            print(f"  note                {source['reason']}")
+    elif source["kind"] == "snapshot":
+        print(f"  source              snapshot, not a checkout ({source['reason']})")
+    else:
+        print(f"  source              unknown ({source['reason']})")
+    if install["target"]:
+        mode = "editable" if install["editable"] else "non-editable"
+        build = install["target_build"] or "unknown"
+        if install["covers_location"] is None:
+            covers = f"coverage unknown ({install['reason']})"
+        elif install["covers_location"]:
+            covers = "covers this location"
+        else:
+            covers = "does NOT cover this location"
+        print(f"  pip install         {mode} target {install['target']} "
+              f"(build {build}), {covers}")
+    else:
+        print(f"  pip install         {install['reason']}")
 
 
 def _print_doctor(report: dict) -> None:
     mark = {True: "ok", False: "--"}
     print(f"crystal {report['crystal']['version']} build {report['crystal']['build']}")
     print(f"  location            {report['crystal']['location']}")
+    _print_source(report["crystal"])
     print(f"[{mark[report['python']['ok']]}] python              "
           f"{report['python']['version']} ({report['python']['executable']})")
     print("")
@@ -211,6 +492,8 @@ def _print_doctor(report: dict) -> None:
     print("")
     print(f"detectors: {', '.join(report['detectors'])}")
     print("")
+    for warning in report.get("warnings", ()):
+        print(f"WARNING: {warning}")
     if report["ready"]:
         print("environment ready. Missing optional tools only reduce coverage; "
               "Crystal degrades instead of failing.")

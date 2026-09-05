@@ -33,6 +33,7 @@ from ..vocabulary import REENTRANCY_GUARDS
 from .base import DetectorSignal, signal
 
 DETECTOR = "asymmetric-side-effect"
+COMPANION_DETECTOR = "asymmetric-companion"
 
 # Operations that move value. For the companion shape these are the primary
 # operations; for the guard shape they are only a confidence boost.
@@ -608,10 +609,14 @@ def _grade_note(grade: str, guard: _Guard, site: _Site) -> str:
             f"consumes ({args_text}) — a precondition of the caller"
         )
     if shared:
+        loose = sorted(set(guard.identifiers) - site.arg_identifiers)
         return (
-            f"guard coupled only to the argument(s) {', '.join(shared)}, and to "
-            f"no state {site.callee} writes ({written_text}) — naming a value "
-            f"it passes on is not a guard on the callee's effect"
+            f"guard coupled only to the argument(s) {', '.join(shared)}; "
+            + (f"its subject {', '.join(loose[:3])} is " if loose
+               else "its subject is ")
+            + f"neither read nor written by {site.callee} ({written_text}) — a "
+              f"precondition of the calling function, not a guard on the "
+              f"callee's effect"
         )
     return (
         f"guard reads state {site.callee} writes ({written_text}) but "
@@ -961,8 +966,30 @@ def _find_asymmetries(sites: list[_CallSite]):
     return asymmetries
 
 
+def _effect_index(contracts) -> dict[str, set[str]]:
+    """Bare function name -> the state any definition of it touches.
+
+    Deliberately name-keyed and permissive: the companion shape reasons about
+    bare callee names, so this is the most that can honestly be offered. A name
+    absent here is unresolved, not uncoupled — the two must not be conflated.
+    """
+    index: dict[str, set[str]] = {}
+    for contract in contracts:
+        for function in contract.functions:
+            touched = set(function.writes) | set(function.reads)
+            if touched:
+                index.setdefault(function.name, set()).update(touched)
+    return index
+
+
+def _primary_effect(operation: str, effects: dict[str, set[str]]):
+    """State the primary operation writes, or None when it cannot be resolved."""
+    return effects.get(operation)
+
+
 def _companion_signals(contracts, include_tests=False) -> list[DetectorSignal]:
     sites = _collect_call_sites(contracts, include_tests=include_tests)
+    _effects = _effect_index(contracts)
     signals: list[DetectorSignal] = []
 
     for asym in _find_asymmetries(sites):
@@ -1004,8 +1031,42 @@ def _companion_signals(contracts, include_tests=False) -> list[DetectorSignal]:
                 f"Does {asym['operation']} have a different accounting path in this context?",
             ]
 
+            evidence.append(
+                f"confidence is a convention ratio, not a defect confidence: "
+                f"{asym['count']} of {asym['total']} equivalent sites include "
+                f"{label}. It measures how consistent the surrounding code is, "
+                f"not how wrong this site is"
+            )
+            effect = _primary_effect(asym["operation"], _effects)
+            if effect is None:
+                evidence.append(
+                    f"coupling [unresolved]: {asym['operation']} is not defined "
+                    f"in the scanned sources — inherited, declared in an "
+                    f"interface, or outside the tree — so whether {label} "
+                    f"touches the state it writes cannot be established here"
+                )
+            else:
+                companion_state = _effects.get(label)
+                shared = (
+                    sorted(effect & companion_state)
+                    if companion_state else []
+                )
+                if shared:
+                    evidence.append(
+                        f"coupling [effect-coupled]: {label} touches "
+                        f"{', '.join(shared)}, which {asym['operation']} writes"
+                    )
+                else:
+                    evidence.append(
+                        f"coupling [uncoupled]: {label} touches none of the "
+                        f"state {asym['operation']} writes "
+                        f"({', '.join(sorted(effect)) or 'none'}) — the "
+                        f"regularity may be a writing convention rather than a "
+                        f"required side-effect"
+                    )
+
             signals.append(signal(
-                detector=DETECTOR,
+                detector=COMPANION_DETECTOR,
                 title=(
                     f"{asym['operation']} without {label} "
                     f"in {missing_site.function}"
@@ -1034,7 +1095,23 @@ def detect(
     include_tests: bool = False,
     **kwargs,
 ) -> list[DetectorSignal]:
-    """Run both shapes of the asymmetric side-effect detector."""
+    """The guard-asymmetry shape only.
+
+    The companion shape moved to its own detector. The two answer different
+    questions and are scored by different evidence, and nothing established
+    that a number from one was comparable to a number from the other — so they
+    no longer share a ranking. See `asymmetric_companion`.
+    """
+    signals = _guard_signals(contracts, include_tests)
+    return sorted(signals, key=lambda s: (-s.confidence, s.contract, s.function, s.line))
+
+
+def detect_companion(
+    contracts,
+    engine=None,
+    include_tests: bool = False,
+    **kwargs,
+) -> list[DetectorSignal]:
+    """The missing-companion shape, on its own scale."""
     signals = _companion_signals(contracts, include_tests)
-    signals.extend(_guard_signals(contracts, include_tests))
     return sorted(signals, key=lambda s: (-s.confidence, s.contract, s.function, s.line))

@@ -80,6 +80,11 @@ def parse_project(paths) -> ParseResult:
             continue
         used.append(f"{language}:{backend}")
         detailed = getattr(module, "parse_file_detailed", None)
+        # Front-ends that resolve casts and struct literals against declared
+        # names get one catalog over every file in the group, so a contract
+        # declared in another file is recognised where it is cast.
+        catalog_builder = getattr(module, "type_catalog", None)
+        catalog = catalog_builder(files) if catalog_builder is not None else None
         for path in files:
             try:
                 if detailed is not None:
@@ -88,7 +93,10 @@ def parse_project(paths) -> ParseResult:
                     result.wirings.extend(wirings)
                     result.bindings.extend(bindings)
                     continue
-                result.contracts.extend(module.parse_file(path))
+                if catalog is not None:
+                    result.contracts.extend(module.parse_file(path, catalog))
+                else:
+                    result.contracts.extend(module.parse_file(path))
             except (OSError, ValueError, RecursionError) as exc:
                 result.diagnostics.append(
                     ParseDiagnostic(str(path), "error", f"parse failed: {exc}")
@@ -114,6 +122,24 @@ def _mark_test_contracts(contracts) -> None:
                 function.is_test = True
 
 
+# What the Solidity regex front-end does not model. Naming the parser is not
+# the same as naming what using it costs: a detector that stays quiet because
+# the receiver's type could not be resolved looks exactly like a clean result.
+# These are the shapes measured to behave differently from the tree-sitter
+# front-end, so a report produced on the fallback can say which conclusions it
+# is not entitled to draw.
+SOLIDITY_REGEX_LIMITATIONS = (
+    "import statements are not resolved, so a receiver typed by an imported "
+    "contract or interface cannot be identified",
+    "`using X for Y` bindings are not modelled, so a call through one is not "
+    "attributed to the library it resolves to",
+    "user-defined value types (`type X is …`) are treated as ordinary types",
+    "a modifier's body is not followed, so guards it applies are seen only by "
+    "name",
+    "only the first call expression in a statement is followed outward",
+)
+
+
 def parser_report() -> dict:
     """Machine-readable parser availability, used by `crystal doctor`."""
     solidity_backend = _solidity_backend()[1]
@@ -124,6 +150,9 @@ def parser_report() -> dict:
             "treesitter_available": solidity_ts.available(),
             "status": solidity_ts.status(),
             "fallback": "regex",
+            "reduced_fidelity": solidity_backend == "regex",
+            "limitations": list(SOLIDITY_REGEX_LIMITATIONS)
+            if solidity_backend == "regex" else [],
         },
         "rust": {
             "backend": "tree-sitter" if rust_ts.available() else "unavailable",

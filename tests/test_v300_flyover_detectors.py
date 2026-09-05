@@ -26,6 +26,19 @@ from crystal.detectors.asymmetric_side_effect import _leaf_name
 from crystal.detectors.base import DetectorSignal
 from crystal.parsers import parse_project
 from crystal.symbolic import SymbolicEngine
+import pytest
+from crystal.parsers import solidity_ts, treesitter_enabled
+
+needs_solidity_treesitter = pytest.mark.skipif(
+    not treesitter_enabled() or not solidity_ts.available(),
+    reason=(
+        "needs the tree-sitter Solidity front-end: the regex fallback does not "
+        "resolve imports, `using for` bindings or user-defined value types, so "
+        "a receiver's type cannot be identified. See "
+        "crystal.parsers.SOLIDITY_REGEX_LIMITATIONS."
+    ),
+)
+
 
 
 def _contracts(tmp_path, text, name="Target.sol"):
@@ -369,6 +382,7 @@ contract Council {
 """
 
 
+@needs_solidity_treesitter
 def test_a_guard_the_callee_re_establishes_is_not_an_asymmetry(tmp_path):
     """`expel` pre-checks what `setQuorum` checks itself; `admit` relies on the callee."""
     assert _signals(tmp_path, COUNCIL, ["asymmetric-side-effect"]) == []
