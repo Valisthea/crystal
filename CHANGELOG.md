@@ -1,5 +1,70 @@
 # Changelog
 
+## Crystal V1.00 Build 013 — the score that disagreed with the evidence beside it
+
+Build 012's `asymmetric-side-effect` was measured against three unrelated public
+protocols, and its confidence was anti-correlated with the truth on all three:
+
+```
+0.833  Strata    guards foreign to the callee            (dubious)
+0.770  Flyover   the real Critical                       (true)
+0.650  CapyFi    a deliberate, correct asymmetry         (false positive)
+```
+
+The only real defect ranked second, behind the least coupled case.
+
+The cause was arithmetic. Confidence was a base plus a boost per corroborating
+fact, and coupling — the thing that actually separates the three — was printed
+as a note *beside* the score instead of setting it. So a case with three
+unrelated preconditions outscored a guard reading the exact slot the callee
+clamps, because it had more guards.
+
+Coupling is now the dominant term, in three bands that do not overlap. Nothing
+inside a band can climb into the one above it.
+
+**What counts as coupling changed too.** The old test intersected the guard's
+operands with the callee's `reads | writes`. A callee reads a great deal of
+state, so almost any guard coupled — which is how a pair of `deposit`
+preconditions came to be graded stronger than the real case. Only state the
+callee **writes** counts now, and a receiver rule fires only when the call
+actually mutates that receiver: a getter on a handle is not an effect to guard.
+
+**The sharp discriminant is relational, and needs both halves.** The strong
+shape relates state the callee *writes* to an argument it *consumes* — a guard
+re-deciding what the callee already decides about its own input. That is
+exactly the real defect: it compares the collateral slot the callee clamps
+against the penalty argument the callee clamps it with, and the callee uses
+`Math.min`, so the guard decides nothing and only blocks a settlement for a
+payment already made.
+
+Either half alone is much weaker, and both weak halves were among the measured
+cases. State alone is ordinary control flow — a caller may legitimately read a
+flag its callee later sets, which is the Strata shape. Argument alone is nearly
+free, since a guard naturally names the values it is about to pass on, which is
+the CapyFi shape: the paused-borrowing check is a precondition of borrowing,
+and repayment must stay possible while borrowing is suspended.
+
+**Guards are no longer summed.** Only the single best-coupled guard is evidence.
+Counting differentiating conditions was what put the least coupled case first.
+
+```
+0.770  Flyover   effect-coupled
+0.440  Strata    partially-coupled   reads a flag the callee sets, constrains no argument
+0.440  CapyFi    partially-coupled   names an argument it passes on, no written state
+```
+
+Every weak grade says so in its own evidence, and adds that the asymmetry is
+real but nothing ties the differentiating condition to what the shared call
+does. **Recall is unchanged — 1 / 8 / 30 on the three targets, before and
+after.** Selection was deliberately left alone; only the grading moved. A
+detector that reports just what it can prove is worth nothing to someone
+looking for what nobody has proved yet: all three are still emitted, correctly
+ordered.
+
+Tests: 290 passing (+9), on synthetic shapes sharing no vocabulary with any of
+the three targets, plus a test asserting the detector source contains none of
+their words.
+
 ## Crystal V1.00 Build 012 — the contract does the opposite thing next door
 
 Measured against a real multi-contract protocol rather than a fixture:

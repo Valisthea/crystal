@@ -488,6 +488,138 @@ def _coupling(guard: _Guard, site: _Site) -> str | None:
     return None
 
 
+# ── Coupling grade: what governs the score ──────────────────────────────
+#
+# Whether a differentiating guard is *about* the shared call, or merely a
+# precondition of the caller that happens to sit in front of it. This is the
+# whole discriminant, so it is the dominant term of the confidence rather than
+# an annotation beside it.
+#
+#   effect-coupled   the guard's operands meet state the callee WRITES — it
+#                    speaks about the effect the sibling performs unguarded
+#   argument-coupled the operands meet only an argument the callee consumes;
+#                    guards routinely name the variables they pass on, so this
+#                    is nearly free and carries little evidence
+#   uncoupled        no intersection at all: a precondition of the caller,
+#                    which an asymmetry between siblings is expected to have
+#
+# Reads are deliberately excluded. A callee reads a great deal of state, so
+# testing `reads | writes` makes almost any guard couple — which is exactly how
+# an entirely uncoupled pair of `deposit` preconditions came to outrank a guard
+# reading the very slot the callee clamps.
+
+EFFECT_COUPLED, PARTIAL_COUPLED, UNCOUPLED = (
+    "effect-coupled", "partially-coupled", "uncoupled",
+)
+
+_GRADE_ORDER = {UNCOUPLED: 0, PARTIAL_COUPLED: 1, EFFECT_COUPLED: 2}
+
+# The band a grade puts the signal in. Bands do not overlap: no amount of
+# corroboration lifts a weakly coupled guard past a fully coupled one.
+_GRADE_BANDS = {
+    EFFECT_COUPLED: (0.74, 0.85),
+    PARTIAL_COUPLED: (0.42, 0.48),
+    UNCOUPLED: (0.30, 0.38),
+}
+
+
+def _written_by(site: _Site) -> set[str]:
+    """State the shared callee writes, one level through the declared type."""
+    if site.resolved is None:
+        return set()
+    return set(site.resolved.writes)
+
+
+def _touches_written_state(guard: _Guard, site: _Site) -> bool:
+    """The guard reads state the shared callee writes."""
+    written = _written_by(site)
+    if not written:
+        return False
+    ids = set(guard.identifiers)
+    # Reading through the handle the call mutates counts, but only because the
+    # call mutates it — a getter on a handle is not an effect worth guarding.
+    receiver = _normalize(site.receiver or "")
+    if receiver:
+        if receiver.split(".")[0].split("[")[0] in ids:
+            return True
+        if any(site.env.receiver_of.get(name) == receiver for name in ids):
+            return True
+    return bool(written & (ids | site.env.state_behind(ids)))
+
+
+def _grade(guard: _Guard, site: _Site) -> str:
+    """How strongly one guard speaks about the callee's own effect.
+
+    The strongest shape relates the state the callee *writes* to an argument it
+    *consumes*: that is a guard re-deciding something the callee already
+    decides about its own input, which is what a redundant gate looks like.
+
+    Either half alone is much weaker evidence. State alone is ordinary control
+    flow — a caller may legitimately read a flag its callee later sets.
+    Argument alone is nearly free, since a guard naturally names the values it
+    is about to pass on. Both halves together is the shape worth reading.
+    """
+    ids = set(guard.identifiers)
+    if not ids:
+        return UNCOUPLED
+    on_state = _touches_written_state(guard, site)
+    on_argument = bool(ids & site.arg_identifiers)
+    if on_state and on_argument:
+        return EFFECT_COUPLED
+    if on_state or on_argument:
+        return PARTIAL_COUPLED
+    return UNCOUPLED
+
+
+def _best_graded(guards, site: _Site):
+    """The single most coupled guard, and its grade.
+
+    Guards are never summed. Three uncoupled preconditions are three pieces of
+    the same non-evidence; counting them was what put the least coupled case
+    top of the ranking.
+    """
+    if not guards:
+        return None, UNCOUPLED
+    ranked = sorted(
+        ((_grade(g, site), g) for g in guards),
+        key=lambda pair: -_GRADE_ORDER[pair[0]],
+    )
+    grade, guard = ranked[0]
+    return guard, grade
+
+
+def _grade_note(grade: str, guard: _Guard, site: _Site) -> str:
+    written = sorted(_written_by(site))
+    shared = sorted(set(guard.identifiers) & site.arg_identifiers)
+    written_text = ", ".join(written) if written else "none resolved"
+    args_text = ", ".join(site.arg_texts) if site.arg_texts else "none"
+
+    if grade == EFFECT_COUPLED:
+        return (
+            f"{_coupling_note(guard, site)}; and it constrains "
+            f"{', '.join(shared)}, which {site.callee} consumes — the guard "
+            f"re-decides what the callee already decides about its own input"
+        )
+    if grade == UNCOUPLED:
+        return (
+            f"guard not coupled to the callee: its operands "
+            f"({', '.join(sorted(guard.identifiers)[:4])}) meet neither the "
+            f"state {site.callee} writes ({written_text}) nor the arguments it "
+            f"consumes ({args_text}) — a precondition of the caller"
+        )
+    if shared:
+        return (
+            f"guard coupled only to the argument(s) {', '.join(shared)}, and to "
+            f"no state {site.callee} writes ({written_text}) — naming a value "
+            f"it passes on is not a guard on the callee's effect"
+        )
+    return (
+        f"guard reads state {site.callee} writes ({written_text}) but "
+        f"constrains none of the arguments it consumes ({args_text}) — a "
+        f"caller reading a flag its callee later sets is ordinary control flow"
+    )
+
+
 def _coupling_note(guard: _Guard, site: _Site) -> str:
     receiver = _normalize(site.receiver or "")
     ids = set(guard.identifiers)
@@ -620,17 +752,22 @@ def _guard_signals(contracts, include_tests=False) -> list[DetectorSignal]:
         extras: list[_Guard] = report["extras"]
         strength = report["strength"]
         sibling = guarded[0]
-        lead = next(
-            (g for g in extras if _coupling(g, sibling) == STRONG), extras[0]
-        )
-        confidence = 0.70 if strength == STRONG else 0.58
-        if bare.callee in VALUE_OPERATIONS:
-            confidence += 0.04
-        if bare.resolved is not None and bare.resolved.writes:
-            confidence += 0.04
-        if any(g.kind in {REVERT, EXIT} for g in extras):
-            confidence += 0.03
-        confidence = round(min(0.85, confidence), 3)
+        # Coupling is the discriminant, so it sets the band and everything else
+        # only moves the signal inside it. The count of differentiating guards
+        # is deliberately not a term: only the best coupled one is evidence.
+        lead, grade = _best_graded(extras, sibling)
+        if lead is None:
+            lead = extras[0]
+        floor, ceiling = _GRADE_BANDS[grade]
+        confidence = floor
+        if grade == EFFECT_COUPLED:
+            if bare.callee in VALUE_OPERATIONS:
+                confidence += 0.04
+            if lead.kind in {REVERT, EXIT}:
+                confidence += 0.03
+        elif lead.kind in {REVERT, EXIT}:
+            confidence += 0.02
+        confidence = round(min(ceiling, confidence), 3)
 
         target = bare.call_text
         evidence = [
@@ -650,7 +787,13 @@ def _guard_signals(contracts, include_tests=False) -> list[DetectorSignal]:
                 f"guard on {sibling.function} path, absent on {bare.function} "
                 f"path: {guard.describe()}"
             )
-        evidence.append(f"coupling: {_coupling_note(lead, sibling)}")
+        evidence.append(f"coupling [{grade}]: {_grade_note(grade, lead, sibling)}")
+        if grade != EFFECT_COUPLED:
+            evidence.append(
+                "the asymmetry is real, but nothing ties the differentiating "
+                "condition to what the shared call does — it may be a "
+                "deliberate difference in the callers' own preconditions"
+            )
         evidence.append(
             "same arguments at both sites: " + ", ".join(bare.arg_texts)
         )
