@@ -14,6 +14,43 @@ SKIP = {
     "dist", ".build", "forge-cache", "venv", "site-packages",
 }
 
+# Directory segments whose contents are excluded from research by default, mapped
+# to the reason they are dropped. Unlike `SKIP`, these are *not* discarded at
+# discovery: the files are still parsed and reported (under the excluded bucket)
+# so an operator can see what was dropped and restore it with `--include-tests`.
+#
+# The distinction from the parser's own fixture detection (`is_test_source`) is
+# scope: that catches `test/`, `mock/`, `*.t.sol`; these add the shapes it misses
+# — a hyphenated `test-contracts/` scaffolding tree, and *superseded* production
+# copies under `legacy/` or `deprecated/`. Superseded code is a judgement call,
+# so it carries its own reason and stays visible rather than being silently cut.
+EXCLUDED_DIR_SEGMENTS = {
+    "test-contracts": "test-scaffolding directory",
+    "test_contracts": "test-scaffolding directory",
+    "testcontracts": "test-scaffolding directory",
+    "mocks": "test-scaffolding directory",
+    "mock": "test-scaffolding directory",
+    "scaffolding": "test-scaffolding directory",
+    "fixtures": "test-scaffolding directory",
+    "legacy": "superseded/legacy directory",
+    "deprecated": "superseded/legacy directory",
+}
+
+
+def excluded_dir_reason(path) -> str | None:
+    """Reason `path` sits in an excluded directory, or None if it does not.
+
+    Matches whole path segments case-insensitively, so `.../src/legacy/X.sol`
+    and `.../test-contracts/Y.sol` are recognised while a production contract
+    merely *named* `LegacyPool` in an ordinary directory is left untouched. The
+    judgement is structural — by directory, never by contract name.
+    """
+    for segment in Path(path).parts:
+        reason = EXCLUDED_DIR_SEGMENTS.get(segment.lower())
+        if reason is not None:
+            return reason
+    return None
+
 # Manifest markers that identify a Rust ecosystem without compiling anything.
 RUST_FRAMEWORKS = {
     "frame-support": "substrate",

@@ -1,5 +1,82 @@
 # Changelog
 
+## Crystal V1.00 Build 012 — the contract does the opposite thing next door
+
+Measured against a real multi-contract protocol rather than a fixture:
+`rsksmart/liquidity-bridge-contract` (Rootstock Flyover), 5 contracts and 17
+files, carrying a Critical the operator had already found by hand. Crystal
+produced 9 signals on it, all false, and did not name the defect.
+
+The defect is two entry points of one contract reaching the same callee with the
+same arguments, one behind a condition that can revoke and one behind nothing —
+and the callee already clamps, so the condition guards nothing and only blocks a
+settlement for a payment already made. In the operator's words: *the contract
+does the opposite thing next door.*
+
+**`asymmetric-side-effect` could not see it, for two independent reasons.**
+`VALUE_OPERATIONS` was a hardcoded name list and gated the grouping, so a callee
+named anything else was never even considered. And the guard is an `if (..)
+revert` nested inside another `if`, while the detector collected only
+function-wide `require` and modifiers — both siblings carry `nonReentrant`, so
+even that was symmetric. The detector now walks the IR per entry point tracking
+path conditions with polarity — enclosing branches, `require`, `if (..) revert`,
+`if (..) return`, modifiers, and the top-level guards of internal helpers on the
+path — and groups sites by (contract, callee, receiver, arity) across two or
+more entry points. The name list survives only as a +0.04 confidence boost.
+
+A guard counts only when *coupled* to the call: it reads from the receiver the
+call mutates, or from state the resolved callee touches. Two precision rules
+removed six false positives: identical argument text is required, and a wrapper
+that pre-checks what the callee itself requires is not reported. The real callee
+clamps with `Math.min` instead of reverting, so it is not suppressed — which is
+exactly the asymmetry.
+
+It reports the shape, not the verdict. Crystal names `refundUserPegOut` as the
+unguarded site; knowing that the *guard* is the defect requires knowing the
+callee clamps, and that is protocol interpretation, which is not Crystal's job.
+
+**One-shot initializers headed the ranking.** `initialize -> depositPegOut ->
+refundPegOut` scored 0.550 against 0.506 for the real chain, and four of nine
+slots in the operator's own campaign went to `initialize` chains. A function
+carrying `initializer` / `reinitializer` — or the hand-rolled equivalent, a flag
+it sets that blocks a second call — cannot join a sequence of length > 1. 71
+sequences pruned on that rule alone; no `initialize` chain survives anywhere.
+
+**`call-flow` gated the semantics it was supposed to serve.** Build 010 added
+cross-contract call edges under a new `edge_kind`, and campaigns match
+transitions by exact kind. So every campaign declaring a *meaning* —
+`balance-transfer`, `write-read` — rejected every cross-contract chain, because
+the chain's edges said `call-flow`, a *mechanism*. The operator's P5 campaign,
+written for this exact defect, therefore did not contain the defect chain at
+all. Transitions now also match the kinds an edge's own state categories imply.
+The chain lands at rank 2 of 10 inside P5.
+
+**Scaffolding was research input.** `src/test-contracts/` vendors the entire
+Gnosis Safe codebase and `src/legacy/` holds superseded copies of the live
+contracts; the fixture classifier matched `test/` and `mock/` by name and let
+both through. 52 of 69 contracts are now excluded by path segment, listed with a
+per-contract reason, restorable with `--include-tests`.
+
+**Duplicates.** One (detector, contract, function) yields one signal, highest
+confidence winning and the other instances' lines folded in. One chain yields
+one candidate, annotated with every campaign that selected it.
+
+| on the operator's 17-file scope | Build 011 | Build 012 |
+| --- | ---: | ---: |
+| detector signals | 9 | **6** |
+| of which name the defect | 0 | **1** |
+| campaign candidates | 19 | **12** |
+| chains rendered twice | 3 | **0** |
+| chains headed by `initialize` | 6 of top 10 | **0** |
+| rank of the real defect chain | 11th | **2nd** |
+
+On the full source tree: 33 signals to 6, 27 composition candidates to 8.
+`confirmed_findings` is still 0, and still unreachable by machine.
+
+Tests: 281 passing (+25). The asymmetry shape is proved on a second fixture in an
+unrelated domain — membership dues — sharing no vocabulary with the target, so
+the rule is structural and not a codified name.
+
 ## Crystal V1.00 Build 011 — the chain that started where nobody could enter
 
 Build 010's cross-contract call edges anchored on whichever function contained

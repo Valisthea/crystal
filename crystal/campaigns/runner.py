@@ -7,10 +7,26 @@ and return top-K candidates per campaign.
 
 from __future__ import annotations
 
-from ..graphs.state import classify_state
+from dataclasses import replace
+
+from ..graphs.state import classify_state, one_shot_functions
 from ..naming import bare_name
 from ..quality.normalize import stable_id
-from .definition import CampaignDefinition
+from .definition import CampaignDefinition, TransitionKind
+
+# What a state category means as a transition. Lets a campaign declare the
+# semantics it hunts without also having to enumerate every mechanism by which
+# two functions might be linked.
+KIND_BY_CATEGORY = {
+    "balance": TransitionKind.BALANCE_TRANSFER.value,
+    "ownership": TransitionKind.OWNERSHIP_ACTION.value,
+    "role": TransitionKind.ROLE_ACTION.value,
+    "nonce": TransitionKind.NONCE_AUTH.value,
+    "temporal": TransitionKind.TEMPORAL_ACTION.value,
+    "registry": TransitionKind.REGISTRY_ACTION.value,
+    "proxy": TransitionKind.UPGRADE_ACTION.value,
+    "storage": TransitionKind.WRITE_READ.value,
+}
 from .result import CampaignCandidate, CampaignResult
 from .scoring import score_candidate
 
@@ -27,6 +43,12 @@ def run_campaign(
     novel_behaviors = result.get("novel_behaviors", [])
     state_graph = result.get("state_graph")
     detectors = result.get("detectors", [])
+
+    # A one-shot initializer already ran on the deployed proxy (Initializable = 1),
+    # so it can never head or join a live attack sequence. Excluded from any
+    # sequence of length > 1 below, so `initialize -> ...` never outranks a real
+    # multi-step defect chain.
+    one_shot = one_shot_functions(state_graph) if state_graph else set()
 
     # Filter contracts by scope.
     scoped_contracts = [
@@ -58,6 +80,11 @@ def run_campaign(
 
         if len(seq) > scope.max_sequence_length:
             prune("max_sequence_length")
+            continue
+
+        # One-shot initializers cannot appear in a multi-step attack sequence.
+        if len(seq) > 1 and one_shot.intersection(seq):
+            prune("one_shot_initializer")
             continue
 
         fn_contracts = {s.split(".")[0] for s in seq if "." in s}
@@ -109,10 +136,20 @@ def run_campaign(
             prune("allowed_state")
             continue
 
+        # A campaign declares what a transition MEANS (`balance-transfer`),
+        # not how the two functions came to be connected. `call-flow` says the
+        # link is a cross-contract call rather than shared storage — a
+        # mechanism, not a meaning — so matching on edge kind alone made every
+        # semantic campaign reject every cross-contract chain. Match on the
+        # kinds the edges' own state categories imply as well.
+        effective_kinds = set(edge_kinds) | {
+            KIND_BY_CATEGORY[category]
+            for category in categories if category in KIND_BY_CATEGORY
+        }
         if campaign.transitions and not any(
-            campaign.matches_transition(ek) for ek in edge_kinds
+            campaign.matches_transition(kind) for kind in effective_kinds
         ):
-            if edge_kinds:
+            if effective_kinds:
                 prune("transitions")
                 continue
 
@@ -216,20 +253,83 @@ def run_campaigns(
     result: dict,
     top_global: int = 3,
 ) -> list[CampaignResult]:
-    """Run multiple campaigns and produce a global top-K."""
+    """Run every enabled campaign, then deduplicate chains across campaigns.
+
+    `top_global` is retained for call-site compatibility. Ranking is per chain,
+    not a global top-K: a chain several campaigns select is one candidate, kept
+    under its strongest campaign and annotated with the rest.
+    """
     campaign_results = []
     for campaign in campaigns:
         if not campaign.enabled:
             continue
         campaign_results.append(run_campaign(campaign, result))
 
-    # Global top-K across campaigns.
-    all_candidates = []
-    for cr in campaign_results:
-        all_candidates.extend(cr.candidates)
-    all_candidates.sort(key=lambda c: -c.score)
-
+    registry = result.get("campaign_registry")
+    operator_ids = set(getattr(registry, "operator_campaign_ids", None) or set())
+    priority_by_id = {c.campaign_id: c.priority for c in campaigns}
+    _deduplicate_across_campaigns(campaign_results, operator_ids, priority_by_id)
     return campaign_results
+
+
+def _deduplicate_across_campaigns(
+    campaign_results: list[CampaignResult],
+    operator_ids: set[str],
+    priority_by_id: dict[str, float],
+) -> None:
+    """Collapse identical chains selected by multiple campaigns into one.
+
+    The same sequence can satisfy several campaigns at once. Left alone, every
+    output format renders it once per campaign that matched it. Here it survives
+    under a single campaign only, annotated with the full set of campaigns that
+    selected it, so no chain is duplicated downstream while the aggregation stays
+    visible. Mutates each result's candidate list in place.
+
+    The survivor is chosen to keep the most relevant home: highest score, then
+    an operator-supplied pack over a generic built-in (an operator writes a pack
+    for this engagement — a built-in must not steal its candidate), then highest
+    campaign priority, then a stable campaign-id tiebreak.
+    """
+    occurrences: dict[tuple[str, ...], list[tuple[int, CampaignCandidate]]] = {}
+    for index, cr in enumerate(campaign_results):
+        for candidate in cr.candidates:
+            occurrences.setdefault(candidate.state_sequence, []).append(
+                (index, candidate)
+            )
+
+    winner_index: dict[tuple[str, ...], int] = {}
+    survivor: dict[tuple[str, ...], CampaignCandidate] = {}
+    for chain, entries in occurrences.items():
+        best_index, best = min(
+            entries,
+            key=lambda entry: (
+                -entry[1].score,
+                entry[1].campaign_id not in operator_ids,
+                -priority_by_id.get(entry[1].campaign_id, 0.0),
+                entry[1].campaign_id,
+            ),
+        )
+        all_campaigns = tuple(sorted({c.campaign_id for _, c in entries}))
+        others = [cid for cid in all_campaigns if cid != best.campaign_id]
+        evidence = tuple(best.evidence)
+        if others:
+            evidence = evidence + (
+                "also selected by campaign(s): " + ", ".join(others),
+            )
+        winner_index[chain] = best_index
+        survivor[chain] = replace(
+            best, selected_by_campaigns=all_campaigns, evidence=evidence
+        )
+
+    for index, cr in enumerate(campaign_results):
+        kept: list[CampaignCandidate] = []
+        emitted: set[tuple[str, ...]] = set()
+        for candidate in cr.candidates:
+            chain = candidate.state_sequence
+            if winner_index.get(chain) == index and chain not in emitted:
+                emitted.add(chain)
+                kept.append(survivor[chain])
+        cr.candidates = kept
 
 
 def _build_hypothesis(campaign, delta, edge_kinds, categories) -> str:

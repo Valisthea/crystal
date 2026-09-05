@@ -436,6 +436,85 @@ def _reachable_external_calls(contract, max_depth: int = 4):
     }
 
 
+# ── One-shot and attacker-reachability classification ───────────────────
+
+# Substring that marks an OpenZeppelin-style initialization guard on a modifier:
+# `initializer`, `reinitializer(2)`, `onlyInitializing` all contain it. The name
+# is a library convention, not a protocol-specific one, so matching it is fair.
+_INITIALIZER_MODIFIER_HINT = "initializ"
+
+# A hand-rolled one-shot guards itself with a flag it both reads and sets.
+_INIT_FLAG_HINTS = ("initialized", "initializing")
+
+# Modifier substrings that mean "only a privileged principal may call this", so
+# the function is not a surface an unprivileged attacker can drive.
+_PRIVILEGED_MODIFIER_HINTS = (
+    "owner", "admin", "governance", "role", "authorized", "restricted",
+    "guardian",
+)
+
+
+def _is_one_shot(trans) -> bool:
+    """True when a transition can run at most once for the life of the contract.
+
+    Two shapes qualify: the OpenZeppelin `initializer`/`reinitializer` modifier
+    (fast path), and the structural equivalent — a function guarded by an
+    initialization flag it both reads and sets, so a second call cannot pass.
+    """
+    for modifier in trans.modifiers:
+        if _INITIALIZER_MODIFIER_HINT in bare_name(modifier).lower():
+            return True
+    self_guarded = set(trans.reads) & set(trans.writes)
+    for slot in self_guarded:
+        normalized = bare_name(slot).lower().replace("_", "")
+        if any(hint in normalized for hint in _INIT_FLAG_HINTS):
+            return True
+    return False
+
+
+def _is_privileged(trans) -> bool:
+    """True when a modifier restricts the call to an owner/role/admin principal."""
+    for modifier in trans.modifiers:
+        lowered = bare_name(modifier).lower()
+        if any(hint in lowered for hint in _PRIVILEGED_MODIFIER_HINTS):
+            return True
+    return False
+
+
+def one_shot_functions(state_graph) -> set[str]:
+    """Qualified functions that can run at most once (see `_is_one_shot`).
+
+    Such a function can never head or participate in a live attack sequence: the
+    deployed proxy already ran it, so a second call reverts. Callers exclude it
+    from any sequence of length > 1.
+    """
+    return {
+        trans.function for trans in state_graph.transitions
+        if _is_one_shot(trans)
+    }
+
+
+def attacker_reachable_functions(state_graph) -> set[str]:
+    """Qualified entry points an unprivileged attacker can actually call.
+
+    A chain is only worth triaging if its *head* is reachable: a public/external
+    entry point that is neither one-shot (already initialized) nor gated behind
+    an owner/role modifier. Tails are unrestricted — a privileged callee reached
+    *through* a reachable head is exactly the composition we want to surface.
+    """
+    reachable: set[str] = set()
+    for trans in state_graph.transitions:
+        is_entry = (
+            trans.visibility in {"public", "external"} or trans.is_entry_point
+        )
+        if not is_entry:
+            continue
+        if _is_one_shot(trans) or _is_privileged(trans):
+            continue
+        reachable.add(trans.function)
+    return reachable
+
+
 # ── Sequence candidate generation ───────────────────────────────────────
 
 # Priority categories that boost a sequence's score.

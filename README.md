@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 011</h1>
+<h1 align="center">Crystal V1.00 Build 012</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -13,7 +13,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-256%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-281%20passing-brightgreen">
 </p>
 
 ---
@@ -140,7 +140,7 @@ Output formats: `json`, `markdown`, `sarif`, `arcadia`.
 | `unbounded-input-in-value-op` | a caller-chosen value with no upper bound reaches the amount position of a value operation |
 | `ignored-outcome-in-settlement` | a settlement frame is handed the operation's result, discards it, and moves value anyway |
 | `pipeline-guard-bypass` | one stage of a runtime pipeline moves value through a mechanism another stage's guard does not cover |
-| `asymmetric-side-effect` | a value operation is performed without a companion side-effect — a call *or an authorization guard* — that most equivalent code paths include |
+| `asymmetric-side-effect` | two entry points of one contract reach the same state transition, one behind a revocable condition the other lacks — or a value operation omits a companion side-effect most equivalent paths include |
 
 Every signal carries a line-anchored ordered trace and a falsification list, and
 is `RESEARCH` status. None of them can produce a confirmed finding.

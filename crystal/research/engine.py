@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from ..discovery import excluded_dir_reason
 from ..naming import qualify
 from ..symbolic import SymbolicEngine
 from .behavior import derive_behavior_relations
@@ -33,7 +34,70 @@ VALIDATION_BUDGET = 8
 FOUNDRY_BUDGET = 3
 
 
+def _sequence_contracts(seq_obj) -> set[str]:
+    """Contract names a sequence hypothesis touches (`Contract.func` steps)."""
+    steps = getattr(seq_obj, "sequence", seq_obj)
+    return {str(step).split(".", 1)[0] for step in steps}
+
+
+def _exclude_scaffolding(result):
+    """Drop superseded/scaffolding contracts from research by directory.
+
+    The parser's fixture classifier catches `test/`, `mock/` and `*.t.sol`, but
+    not a hyphenated `test-contracts/` tree or superseded copies under `legacy/`.
+    Those duplicate the live contracts' logic and produce the large majority of
+    the noise. They are moved out of research here — structurally, by path
+    segment — but kept parsed and listed under the same excluded bucket the
+    report already renders, with a per-contract reason, so the exclusion is
+    visible and `--include-tests` restores them.
+    """
+    if result.get("include_tests"):
+        return
+
+    contracts = result.get("contracts", [])
+    excluded, kept = [], []
+    for contract in contracts:
+        if excluded_dir_reason(contract.path):
+            excluded.append(contract)
+        else:
+            kept.append(contract)
+    if not excluded:
+        return
+
+    excluded_names = {c.name for c in excluded}
+    result["contracts"] = kept
+
+    # Keep them visible and restorable: same excluded bucket the report renders.
+    already = {(c.name, c.path) for c in result.get("test_contracts", [])}
+    combined = list(result.get("test_contracts", []))
+    for contract in excluded:
+        if (contract.name, contract.path) not in already:
+            combined.append(contract)
+    result["test_contracts"] = combined
+    result["excluded_scaffolding"] = [
+        {
+            "contract": contract.name,
+            "path": contract.path,
+            "reason": excluded_dir_reason(contract.path),
+        }
+        for contract in excluded
+    ]
+
+    # Anything anchored on excluded code stops being research input: sequences
+    # that touch it, and detector signals that fired on it.
+    result["sequence_hypotheses"] = [
+        seq for seq in result.get("sequence_hypotheses", [])
+        if not (_sequence_contracts(seq) & excluded_names)
+    ]
+    result["detectors"] = [
+        signal for signal in result.get("detectors", [])
+        if excluded_dir_reason(getattr(signal, "path", "")) is None
+        and getattr(signal, "contract", None) not in excluded_names
+    ]
+
+
 def run_research(result):
+    _exclude_scaffolding(result)
     contracts = result["contracts"]
     engine = result.get("symbolic_engine") or SymbolicEngine(contracts)
     result["symbolic_engine"] = engine

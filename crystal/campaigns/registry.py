@@ -20,6 +20,11 @@ class CampaignRegistry:
         # What each explicitly requested pack contributed, so a pack that
         # loaded zero campaigns is reported instead of silently ignored.
         self.load_report: dict[str, int] = {}
+        # Campaigns that came from an operator-supplied pack (the `packs=`
+        # argument), as opposed to a built-in. These are targeted at the
+        # engagement, so when several campaigns select the same chain the
+        # operator's is preferred as the one candidate that survives dedup.
+        self.operator_campaign_ids: set[str] = set()
 
     def register(self, campaign: CampaignDefinition) -> None:
         self._campaigns[campaign.campaign_id] = campaign
@@ -104,10 +109,13 @@ def load_packs(registry: "CampaignRegistry", specs) -> dict[str, int]:
     for spec in specs or []:
         text = str(spec)
         candidate = Path(text)
+        before = set(registry._campaigns)
         if text.endswith(".py") or candidate.exists():
             loaded[text] = load_pack_file(registry, candidate)
         else:
             loaded[text] = registry.load_pack(text)
+        # Whatever this operator spec newly registered is operator-supplied.
+        registry.operator_campaign_ids |= set(registry._campaigns) - before
     return loaded
 
 

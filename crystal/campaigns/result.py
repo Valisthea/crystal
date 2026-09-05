@@ -34,6 +34,11 @@ class CampaignCandidate:
     # The campaign's own open questions, carried to whoever investigates this
     # candidate. Crystal does not answer them; it says which ones apply.
     questions: tuple[str, ...] = ()
+    # Every campaign that selected this exact chain. One chain is rendered once,
+    # not once per campaign that matched it; this lists them all on the survivor
+    # so the aggregation is visible instead of duplicated. `campaign_id` above
+    # remains the highest-scoring campaign, for backward compatibility.
+    selected_by_campaigns: tuple[str, ...] = ()
 
 
 @dataclass

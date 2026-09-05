@@ -32,6 +32,22 @@ SELF_SCOPED_TOKENS = ("msg.sender", "[sender]", "self.sender", "who", "caller")
 CRITICAL_HINTS = ("owner", "admin", "implementation", "authority", "governance",
                   "minter", "role", "oracle", "treasury")
 
+# OpenZeppelin's one-shot guards. A library convention rather than a protocol
+# name: `initializer` makes the function callable exactly once, and
+# `reinitializer(n)` once per version, so the write it protects is not an
+# open privileged write, it is deployment. The residual risk (an
+# implementation whose first call is front-run) is a deployment question the
+# falsification list already asks; it is not a missing caller check.
+ONE_SHOT_MODIFIERS = ("initializer", "reinitializer", "onlyinitializing")
+
+
+def one_shot_modifier(function) -> str | None:
+    for modifier in function.modifiers:
+        lowered = modifier.lower().split("(")[0].strip()
+        if lowered in ONE_SHOT_MODIFIERS:
+            return modifier
+    return None
+
 
 def _write_sites(function, privileged):
     sites = []
@@ -64,6 +80,8 @@ def detect(contracts, engine=None) -> list[DetectorSignal]:
                 continue
             guard = has_sender_guard(function)
             if guard:
+                continue
+            if one_shot_modifier(function):
                 continue
 
             names = sorted({name for name, _ in sites})

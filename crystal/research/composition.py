@@ -1,5 +1,15 @@
 from dataclasses import dataclass
 
+from ..graphs.state import attacker_reachable_functions, one_shot_functions
+
+# A five-contract protocol should hand a reviewer a shortlist, not a catalogue.
+# Call-flow edges through interface-typed handles (what makes cross-contract
+# composition visible at all) multiply the raw sequence count, so the candidates
+# are deduplicated, pruned to attacker-reachable heads, and capped per head.
+MAX_PER_HEAD = 3
+MAX_CANDIDATES = 20
+
+
 @dataclass(frozen=True)
 class CompositionCandidate:
     chain: list[str]
@@ -10,8 +20,14 @@ class CompositionCandidate:
     causal_edges: list[dict] = None
     relevant_state: list[str] = None
 
+
 def _edge_map(result):
     return {(e.source,e.target):e for e in result["state_graph"].causal_edges}
+
+
+def _head(chain) -> str:
+    return chain[0] if chain else ""
+
 
 def compose(result):
     if "state_graph" not in result:
@@ -21,9 +37,17 @@ def compose(result):
     for x in result["impact_paths"]:
         impact_by_path.setdefault(tuple(x.path),[]).append(x)
 
+    # A one-shot initializer already ran on the deployed proxy, so it can never
+    # appear in a live attack sequence. Drop any chain of length > 1 that touches
+    # one rather than letting `initialize -> ...` outrank a real defect chain.
+    one_shot = one_shot_functions(result["state_graph"])
+
     out=[]
     for seq_obj in result["sequence_hypotheses"][:100]:
         seq=list(seq_obj.sequence)
+
+        if len(seq) > 1 and one_shot.intersection(seq):
+            continue
 
         edges=[]
         valid=True
@@ -68,9 +92,45 @@ def compose(result):
             relevant
         ))
 
-    seen=set(); unique=[]
-    for x in out:
-        k=(tuple(x.chain),tuple(x.mechanism),tuple(x.relevant_state))
-        if k not in seen:
-            seen.add(k); unique.append(x)
-    return sorted(unique,key=lambda x:(-x.score,-len(x.chain),x.chain))
+    return _rank_and_cap(out, result["state_graph"])
+
+
+def _rank_and_cap(candidates, state_graph):
+    """Deduplicate by chain, prune unreachable heads, and cap per head.
+
+    This is what turns an open call-flow graph into a triageable shortlist
+    without removing the edges that make cross-contract composition visible.
+    """
+    # Deduplicate by chain: the same sequence reached through a different
+    # mechanism/state set is one candidate, kept at its best score.
+    best_by_chain: dict[tuple, CompositionCandidate] = {}
+    for candidate in candidates:
+        key = tuple(candidate.chain)
+        current = best_by_chain.get(key)
+        if current is None or candidate.score > current.score:
+            best_by_chain[key] = candidate
+
+    # Prune chains whose head an unprivileged attacker cannot call. A privileged
+    # or one-shot head is not an entry an exploit can start from; the graph only
+    # produced it because storage happened to connect. Tails stay unrestricted.
+    reachable = attacker_reachable_functions(state_graph)
+    pruned = [
+        candidate for candidate in best_by_chain.values()
+        if not candidate.chain or _head(candidate.chain) in reachable
+    ]
+
+    ranked = sorted(pruned, key=lambda x: (-x.score, -len(x.chain), x.chain))
+
+    # Cap the fan-out of any single head so one entry point cannot flood the
+    # shortlist with near-duplicate tails.
+    per_head: dict[str, int] = {}
+    capped: list[CompositionCandidate] = []
+    for candidate in ranked:
+        head = _head(candidate.chain)
+        seen = per_head.get(head, 0)
+        if seen >= MAX_PER_HEAD:
+            continue
+        per_head[head] = seen + 1
+        capped.append(candidate)
+
+    return capped[:MAX_CANDIDATES]
