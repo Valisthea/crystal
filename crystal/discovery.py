@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from .parsers.base import LANGUAGE_BY_SUFFIX, SUPPORTED_SUFFIXES
@@ -12,6 +14,9 @@ SKIP = {
     ".git", "node_modules", "lib", "cache", "out", "artifacts", ".venv",
     "target", "__pycache__", "broadcast", "typechain", "typechain-types",
     "dist", ".build", "forge-cache", "venv", "site-packages",
+    # Go: vendored dependencies are not the target, and `testdata` is
+    # ignored by the go tool itself.
+    "vendor", "testdata",
 }
 
 # Directory segments whose contents are excluded from research by default, mapped
@@ -44,12 +49,34 @@ def excluded_dir_reason(path) -> str | None:
     and `.../test-contracts/Y.sol` are recognised while a production contract
     merely *named* `LegacyPool` in an ordinary directory is left untouched. The
     judgement is structural — by directory, never by contract name.
+
+    Go adds one structural marker that is not a directory: a generated file
+    says so in its header (`// Code generated ... DO NOT EDIT.`, the convention
+    the go tool itself documents). An abigen binding or a mockery mock is the
+    generator's code, not the target's, and researching it is researching
+    the generator; like `legacy/`, it stays parsed and visible and can be
+    restored with `--include-tests`.
     """
     for segment in Path(path).parts:
         reason = EXCLUDED_DIR_SEGMENTS.get(segment.lower())
         if reason is not None:
             return reason
+    if str(path).lower().endswith(".go") and _is_generated_go(str(path)):
+        return "generated code (DO NOT EDIT header)"
     return None
+
+
+_GENERATED_GO = re.compile(r"(?m)^// Code generated .* DO NOT EDIT\.\r?$")
+
+
+@lru_cache(maxsize=4096)
+def _is_generated_go(path: str) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(2048).decode("utf-8", "ignore")
+    except OSError:
+        return False
+    return bool(_GENERATED_GO.search(head))
 
 # Manifest markers that identify a Rust ecosystem without compiling anything.
 RUST_FRAMEWORKS = {
@@ -61,6 +88,24 @@ RUST_FRAMEWORKS = {
     "ink": "ink",
     "cosmwasm-std": "cosmwasm",
     "near-sdk": "near",
+}
+
+# Module requirements that identify a Go ecosystem from go.mod alone. A
+# bridge's off-chain service is usually an HTTP server over a chain client;
+# knowing which router and which client is what tells a reader where the
+# attacker-reachable surface and the signing keys are.
+GO_FRAMEWORKS = {
+    "github.com/gorilla/mux": "gorilla-mux",
+    "github.com/gin-gonic/gin": "gin",
+    "github.com/labstack/echo": "echo",
+    "github.com/go-chi/chi": "chi",
+    "github.com/gofiber/fiber": "fiber",
+    "google.golang.org/grpc": "grpc",
+    "github.com/ethereum/go-ethereum": "go-ethereum",
+    "github.com/btcsuite/btcd": "btcd",
+    "github.com/cosmos/cosmos-sdk": "cosmos-sdk",
+    "github.com/cometbft/cometbft": "cometbft",
+    "github.com/tendermint/tendermint": "tendermint",
 }
 
 
@@ -125,6 +170,15 @@ def profile(project, sources=None) -> ProjectProfile:
         if candidate.exists():
             frameworks.add(framework)
             manifests.append(str(candidate))
+    for manifest in list(rglob_files(root, "go.mod"))[:50]:
+        if not _keep(manifest):
+            continue
+        manifests.append(str(manifest))
+        frameworks.add("go-module")
+        text = manifest.read_text(encoding="utf-8", errors="ignore")
+        for requirement, framework in GO_FRAMEWORKS.items():
+            if requirement in text:
+                frameworks.add(framework)
 
     return ProjectProfile(
         str(root), dict(sorted(languages.items())), sorted(frameworks),

@@ -21,6 +21,7 @@ from . import (
     reentrancy,
     unbounded_input,
 )
+from ..models import MOVE, RUST, SOLIDITY, VYPER
 from .base import DetectorSignal
 
 DETECTORS = {
@@ -71,6 +72,15 @@ def run_detectors(contracts, engine=None, selected=None,
     for name, module in sorted(DETECTORS.items()):
         if name not in wanted:
             continue
+        # A detector only sees the languages its premise holds for. Run
+        # `reentrancy-ordering` over Go and it reports "external call precedes
+        # state update" on an RPC server, which is true of the syntax and
+        # meaningless about the language: Go has no re-entrant dispatch to
+        # exploit. Measured on a 548-file Go service, the EVM-premise detectors
+        # produced 56 of 58 signals and none of them were about anything.
+        scope = _detector_targets(module, targets)
+        if not scope:
+            continue
         # Composition detectors need the runtime wiring; the rest do not, and
         # declaring the parameter is how a detector opts in.
         parameters = inspect.signature(module.detect).parameters
@@ -78,7 +88,7 @@ def run_detectors(contracts, engine=None, selected=None,
                      "root": root, "sources": sources}
         extra = {name: value for name, value in available.items()
                  if name in parameters}
-        signals.extend(module.detect(targets, engine, **extra))
+        signals.extend(module.detect(scope, engine, **extra))
     if not include_tests:
         signals = [
             item for item in signals
@@ -89,6 +99,20 @@ def run_detectors(contracts, engine=None, selected=None,
         collapse_signals(signals),
         key=lambda x: (-x.confidence, x.detector, x.contract, x.function, x.line),
     )
+
+
+def _detector_targets(module, contracts):
+    """The contracts a detector's premise actually covers.
+
+    A detector declares `LANGUAGES` when its reasoning is tied to an execution
+    model. Omitting it means the shape is structural and travels: the
+    guard-asymmetry detector compares two entry points reaching one callee,
+    which is as true of a Go method set as of a Solidity contract.
+    """
+    languages = getattr(module, "LANGUAGES", None)
+    if languages is None:
+        return contracts
+    return [c for c in contracts if getattr(c, "language", SOLIDITY) in languages]
 
 
 def collapse_signals(signals) -> list[DetectorSignal]:

@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "Kairos Lab" }]
 keywords = [
     "security", "smart-contracts", "solidity", "rust", "substrate", "move",
-    "vyper", "static-analysis", "symbolic-execution", "audit", "bug-bounty",
+    "vyper", "go", "static-analysis", "symbolic-execution", "audit", "bug-bounty",
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
@@ -38,6 +38,7 @@ treesitter = [
     "tree-sitter>=0.21",
     "tree-sitter-solidity>=1.2",
     "tree-sitter-rust>=0.21",
+    "tree-sitter-go>=0.21",
 ]
 solc = ["solc-select>=1.0"]
 dev = [
@@ -45,11 +46,13 @@ dev = [
     "tree-sitter>=0.21",
     "tree-sitter-solidity>=1.2",
     "tree-sitter-rust>=0.21",
+    "tree-sitter-go>=0.21",
 ]
 all = [
     "tree-sitter>=0.21",
     "tree-sitter-solidity>=1.2",
     "tree-sitter-rust>=0.21",
+    "tree-sitter-go>=0.21",
     "solc-select>=1.0",
 ]
 

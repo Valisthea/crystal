@@ -4,6 +4,12 @@ Every backend follows the same discipline as the Foundry one: detect the tool,
 generate artifacts only from properties Crystal can actually express, run it
 when available, and report UNSUPPORTED with a reason instead of inventing a
 property that would pass vacuously.
+
+A tool's exit code is not a verdict. `EXECUTED_PASS` means the tool reported
+green *and* at least one property carries an execution witness; a green run
+in which nothing ever succeeded is `EXECUTED_VACUOUS`, and the per-property
+verdicts (`crystal/backends/verdict.py`) say what never happened. A run the
+pre-flight refused before launch is `REFUSED`, with the trap named.
 """
 
 from __future__ import annotations
@@ -18,8 +24,31 @@ UNAVAILABLE = "UNAVAILABLE"
 UNSUPPORTED = "UNSUPPORTED"
 EXECUTED_PASS = "EXECUTED_PASS"
 EXECUTED_FAIL = "EXECUTED_FAIL"
+EXECUTED_VACUOUS = "EXECUTED_VACUOUS"
+REFUSED = "REFUSED"
+TOOL_ERROR = "TOOL_ERROR"
 TIMEOUT = "TIMEOUT"
 GENERATED = "GENERATED"
+
+
+def execution_status(verdicts, evaluated: bool) -> str:
+    """The run's status from its verdicts, never from the exit code alone.
+
+    Medusa 1.5.1 prints `[PASSED]` for every property after `calls: 0` when
+    it finds no method to call, and exits 6; an exit code cannot be trusted in
+    either direction. `evaluated` is whether the tool reported evaluating any
+    property at all.
+    """
+    from .verdict import HELD, VIOLATED
+
+    if not evaluated:
+        return TOOL_ERROR
+    outcomes = {item.verdict for item in verdicts}
+    if VIOLATED in outcomes:
+        return EXECUTED_FAIL
+    if HELD in outcomes:
+        return EXECUTED_PASS
+    return EXECUTED_VACUOUS
 
 
 @dataclass(frozen=True)
@@ -28,6 +57,38 @@ class BackendCapabilities:
     available: bool
     version: str | None
     reason: str
+
+
+@dataclass(frozen=True)
+class BackendTraits:
+    """What a backend can and cannot do to the environment, declared up front so
+    the pre-flight can say which properties it cannot decide.
+
+    * `advances_block` — the tool moves `block.number`/`block.timestamp` during
+      a run (Medusa: `blockNumberDelayMax`; Echidna: `maxBlockDelay`). Halmos
+      pins both, so any branch behind a delay is unreachable.
+    * `funds_senders` — actors start with a native balance the tool provides.
+    * `fuzzes_nested_deployments` — the tool calls entry points of contracts the
+      harness deploys itself. Measured false on Medusa 1.5.1 ("no methods to
+      call"), so the harness must forward every entry point explicitly.
+    * `kind` — `fuzzer` picks calls from the harness's own entry points, so a
+      harness without handlers can never transition; `symbolic` runs explicit
+      tests that call the target themselves.
+    * `unmodelled_precompiles` — EVM precompiles the tool cannot execute. A
+      symbolic engine that cannot model `sha256` does not fail on a path that
+      calls it; it explores forever. Measured on halmos 0.3.3: a settlement
+      path through `sha256` ran 26 minutes without a verdict. A property whose
+      reachable actions cross one is UNSUPPORTED on that backend, which is a
+      result; a run that never terminates is not.
+    """
+
+    name: str
+    advances_block: bool
+    funds_senders: bool
+    fuzzes_nested_deployments: bool
+    note: str = ""
+    kind: str = "fuzzer"
+    unmodelled_precompiles: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -53,7 +114,19 @@ class BackendExecution:
     counterexamples: tuple[str, ...] = ()
     unsupported: tuple[str, ...] = ()
     reason: str = ""
+    # True only when a property verdict is HELD or VIOLATED, i.e. the run
+    # produced evidence someone could reproduce. A vacuous green is not.
     reproducible: bool = False
+    # Per-property verdicts with their witness (`verdict.PropertyVerdict`).
+    verdicts: tuple = ()
+    # Pre-flight lines that applied to this contract, refusals included.
+    preflight: tuple[str, ...] = ()
+
+    def verdict_of(self, name: str):
+        for item in self.verdicts:
+            if item.property == name:
+                return item
+        return None
 
 
 def probe(executable: str, *args: str) -> BackendCapabilities:

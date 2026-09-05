@@ -10,6 +10,7 @@ SOLIDITY = "solidity"
 RUST = "rust"
 MOVE = "move"
 VYPER = "vyper"
+GO = "go"
 
 
 @dataclass

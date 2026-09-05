@@ -15,6 +15,14 @@ from .base import (
     privileged_variables,
     signal,
 )
+from ..models import MOVE, RUST, SOLIDITY, VYPER
+
+# "Privileged write with no observable check on the caller" presumes a caller
+# identity the platform authenticates — msg.sender, an origin, a signer. A Go
+# method has no such notion, so the shape degenerates to "an exported method
+# writes its own struct", which is what a method is for. Measured: 5 signals on
+# a real Go service, all of that form.
+LANGUAGES = frozenset({SOLIDITY, RUST, MOVE, VYPER})
 
 DETECTOR = "missing-access-control"
 

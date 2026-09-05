@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..models import MOVE, RUST, SOLIDITY, VYPER, Contract
+from ..models import GO, MOVE, RUST, SOLIDITY, VYPER, Contract
 
 LANGUAGE_BY_SUFFIX = {
     ".sol": SOLIDITY,
@@ -14,6 +14,7 @@ LANGUAGE_BY_SUFFIX = {
     ".move": MOVE,
     ".vy": VYPER,
     ".vyi": VYPER,
+    ".go": GO,
 }
 
 SUPPORTED_SUFFIXES = tuple(LANGUAGE_BY_SUFFIX)

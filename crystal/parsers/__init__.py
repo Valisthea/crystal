@@ -9,8 +9,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from ..models import MOVE, RUST, SOLIDITY, VYPER, Contract
-from . import move_ts, rust_ts, solidity_regex, solidity_ts, vyper_ts
+from ..models import GO, MOVE, RUST, SOLIDITY, VYPER, Contract
+from . import go_regex, go_ts, move_ts, rust_ts, solidity_regex, solidity_ts, vyper_ts
 from .base import (
     LANGUAGE_BY_SUFFIX,
     SUPPORTED_SUFFIXES,
@@ -22,7 +22,9 @@ from .base import (
 )
 
 __all__ = [
+    "GO_REGEX_LIMITATIONS",
     "LANGUAGE_BY_SUFFIX",
+    "SOLIDITY_REGEX_LIMITATIONS",
     "SUPPORTED_SUFFIXES",
     "ParseResult",
     "detect_language",
@@ -42,12 +44,19 @@ def _solidity_backend():
     return solidity_regex, "regex"
 
 
+def _go_backend():
+    if treesitter_enabled() and go_ts.available():
+        return go_ts, "tree-sitter"
+    return go_regex, "regex"
+
+
 BACKENDS = {
     SOLIDITY: _solidity_backend,
     RUST: lambda: (rust_ts, "tree-sitter") if treesitter_enabled() and rust_ts.available()
     else (rust_ts, "unavailable"),
     MOVE: lambda: (move_ts, move_ts.backend_name()),
     VYPER: lambda: (vyper_ts, vyper_ts.backend_name()),
+    GO: _go_backend,
 }
 
 
@@ -137,12 +146,22 @@ SOLIDITY_REGEX_LIMITATIONS = (
     "a modifier's body is not followed, so guards it applies are seen only by "
     "name",
     "only the first call expression in a statement is followed outward",
+    "no call is extracted from a `return` statement, so a helper whose "
+    "whole body is `return f(x)` looks callless",
 )
+
+# What the Go regex front-end does not model, for the same reason. The
+# tree-sitter Go front-end decides interface satisfaction by signature over
+# the whole project and merges a package across its files; the fallback can
+# do neither, so a call through an interface-typed field stays unresolved and
+# the guard-asymmetry grade cannot leave "unresolved" on it.
+GO_REGEX_LIMITATIONS = go_regex.GO_REGEX_LIMITATIONS
 
 
 def parser_report() -> dict:
     """Machine-readable parser availability, used by `crystal doctor`."""
     solidity_backend = _solidity_backend()[1]
+    go_backend = _go_backend()[1]
     return {
         "treesitter_enabled": treesitter_enabled(),
         "solidity": {
@@ -171,5 +190,14 @@ def parser_report() -> dict:
             "treesitter_available": vyper_ts.available(),
             "status": vyper_ts.status(),
             "fallback": "regex",
+        },
+        "go": {
+            "backend": go_backend,
+            "treesitter_available": go_ts.available(),
+            "status": go_ts.status() if treesitter_enabled() else
+            "tree-sitter disabled (CRYSTAL_NO_TREESITTER); regex fallback in use",
+            "fallback": "regex",
+            "reduced_fidelity": go_backend == "regex",
+            "limitations": list(GO_REGEX_LIMITATIONS) if go_backend == "regex" else [],
         },
     }

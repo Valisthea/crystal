@@ -1,5 +1,137 @@
 # Changelog
 
+## Crystal V1.00 Build 015 — three axes the execution engines leave open
+
+Measured against Foundry 1.6.0, Medusa 1.5.1 and Halmos 0.3.3 on one bridge,
+17 contracts, five properties. Not on throughput: Medusa does 1,317 calls a
+second and Halmos carries an SMT solver, and chasing either produces a bad
+clone of both. On the three axes nobody holds.
+
+### Deriving the properties
+
+The engines verified five properties a human wrote: ~50 minutes and 1,688
+harness lines for Foundry alone. Crystal verified zero, refusing with "no
+property could be derived without fabricating protocol assumptions". That
+refusal was right when nothing carried a property. Since Build 010 campaign
+packs carry `CampaignInvariant`s, and those are properties.
+
+`crystal validate --pack <pack> --fixture <spec>` compiles them into Foundry,
+Medusa and Halmos harnesses. On the reference pack, four of five invariants
+compile to all three backends; the fifth refuses, precisely:
+
+    term `the sum of unsettled quote totals` names no state variable of the
+    scoped contracts and is not a sum, a scalar or a balance; Crystal will not
+    infer the arithmetic that defines it
+
+Verified by running it, not by reading it: `forge test` on the generated
+harnesses gives 3 passed, 1 failed, with
+
+    [FAIL: I5 VIOLATED: a settlement call reverted on
+           CollateralManagementContract::_pegOutCollateral]
+        [Sequence] (original: 442, shrunk: 6)
+
+The contract-qualified state name in that message is Build 009's namespacing
+surfacing at the far end of the chain.
+
+**The honest number is 293 lines, not zero.** A deployment fixture stays the
+operator's to write: how an upgradeable stack is wired, who the actors are, and
+how to build a call whose argument is an EIP-712 signature or a Bitcoin
+transaction that must parse cannot be derived from sources without inventing
+them. Crystal refuses to invent and says so per property — without a fixture
+all fifteen combinations are UNSUPPORTED. 293 against 1,688 is 5.8×, and the
+part that remains is the part no engine can take.
+
+### Refusing the unproven green
+
+The dominant failure mode of these tools is not the false positive, it is the
+silent success. Measured: Medusa returned 35 green tests over 1,049,043 calls
+with zero successful deposits, because the actors had a zero balance.
+
+`HELD` now requires an execution witness — sequences run, per-action success
+ratio, decoded revert selectors, and proof that at least one transition
+mutating the property's own state succeeded. Without it the verdict is
+`VACUOUS`. `PropertyVerdict.__post_init__` raises `WitnessRequired`, and
+`dataclasses.replace` re-runs it, so a VACUOUS cannot be promoted after the
+fact — the same structural discipline that keeps `confirmed_findings` at 0.
+
+Three traps are detected before a backend is launched. On the raw repository:
+
+    [REFUSE] homonym: `Quotes` (library) is declared at 2 paths:
+      src/legacy/Quotes.sol, src/libraries/Quotes.sol — the definitions differ.
+      The artifact tree resolved the name to src/legacy/Quotes.sol.
+      PegOutContract imports src/libraries/Quotes.sol, not the one linked.
+        affects 70 contracts
+
+    [REFUSE] zero-balance-actors: register, depositPegout are payable but the
+      harness never forwards msg.value nor funds an actor; every property can
+      only be VACUOUS
+
+It names the copy actually bound, by reading the build cache. `SignatureValidator`
+is the same trap a second time. And the binding is **not stable**: observed
+`src/legacy/Quotes.sol` on one build and `src/libraries/Quotes.sol` on the next
+with nothing changed between them — which is why the refusal cannot be replaced
+by a warning about which one wins.
+
+Halmos pins `block.number` to 1, so a property whose reachability depends on a
+block delta is reported UNSUPPORTED on that backend rather than PASS.
+
+Two supporting fixes fell out of building this. Preflight compared whole-file
+digests to decide whether two declarations diverge — so a helper repeated
+verbatim across generated harnesses read as divergent; it now digests the
+declaration. And a refusal about two test fixtures colliding blocked nothing
+real while teaching an operator to pass `--ignore-preflight` by reflex; blocking
+is scoped to contracts a property runs against, and one ambiguous name prints
+once with the contracts it affects.
+
+### The Go front-end
+
+A bridge's off-chain servers hold the signing keys and build the fields the
+contracts consume. `rsksmart/liquidity-provider-server` is 548 Go files in the
+same program's scope. Crystal had nothing to say about it.
+
+Go has no contracts, no sender, no storage. The mapping is the work, and it is
+argued in the front-end's own docstring: a struct with a method set is a
+contract and its fields are state; a package is a contract and its `var`s are
+state; interface satisfaction is decided **by signature over the whole
+project** — the Go compiler's rule, not name matching — which is what lets a
+call through an interface-typed field resolve to the implementation that runs,
+and therefore what lets the coupling grade exist at all.
+
+Signal trajectory: 164 with the first model, 58 after fixing the model, **2**
+once detectors only see the languages their premise holds for. Both are honest
+and in the low band; the coupling grade is what stops Go's ubiquitous
+`if err != nil` from producing hundreds of fake asymmetries.
+
+A detector now declares `LANGUAGES` when its reasoning is tied to an execution
+model. `reentrancy-ordering` produced 51 signals on that service — every one
+"external call precedes state update" on an ordinary method, none of them about
+anything, because Go has no re-entrant dispatch to exploit. Omitting the
+declaration means the shape is structural and travels, which is the case for
+guard asymmetry.
+
+The panic class — index, nil dereference, type assertion — is carried faithfully
+in the IR and consumed by no detector. Stated rather than faked.
+
+### One more thing a backend cannot do
+
+Halmos 0.3.3 cannot execute the hashing precompiles. Measured: a settlement
+path reaching `sha256` ran 26 minutes and produced no verdict — the log never
+left compilation output, the process reached 940 MB. That is neither a failure
+nor a pass, and unnamed it is worse than either: an operator waits, kills it,
+and concludes the tool is broken rather than that the property is undecidable
+there. `BackendTraits.unmodelled_precompiles` declares it, and such a property
+is UNSUPPORTED before anything launches — the same discipline as
+`advances_block`. Medusa, which executes the precompile, stays silent.
+
+Finding it exposed a parser gap worth naming: `paid[_identify(x)] += y` records
+no call at all. A call inside an index expression on the left-hand side is
+dropped by both front-ends, so nothing built on `ir.calls()` can follow it. That
+is pinned as a strict xfail rather than worked around, because it silently
+narrows every traversal in the engine, not only this one.
+
+Tests: 470 passing (+95). Go has a regex fallback with its own declared
+limitations, as Solidity does.
+
 ## Crystal V1.00 Build 014 — the fallback nobody was watching
 
 Three residues on the coupling grade, five parallel improvements, and one

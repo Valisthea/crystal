@@ -21,7 +21,7 @@ from .campaigns import discover_packs
 from .detectors import detector_names
 from .discovery import discover, profile
 from .engine import research
-from .models import MOVE, RUST, SOLIDITY, VYPER
+from .models import GO, MOVE, RUST, SOLIDITY, VYPER
 from .parsers import parser_report
 from .report import WRITERS, markdown, payload
 
@@ -56,9 +56,14 @@ CAPABILITIES = [
     "guard-asymmetry-coupling-grade", "companion-asymmetry-detector",
     "type-aware-call-extraction", "control-transfer-resolution",
     "scaffolding-exclusion-by-path", "build-drift-detection",
+    # v3.2
+    "invariant-property-compilation", "execution-witness-gate",
+    "backend-preflight-refusal", "go-frontend",
+    "detector-language-scope",
 ]
 
-LANGUAGES = {"solidity": SOLIDITY, "rust": RUST, "move": MOVE, "vyper": VYPER}
+LANGUAGES = {"solidity": SOLIDITY, "rust": RUST, "go": GO,
+             "move": MOVE, "vyper": VYPER}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -117,6 +122,16 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--out-dir", help="write generated artifacts here")
     validate.add_argument("--timeout", type=int, default=300)
     validate.add_argument("--no-solc", action="store_true")
+    validate.add_argument("--pack", action="append", metavar="PACK",
+                          help="compile this campaign pack's invariants into "
+                               "harnesses (dotted module or .py path, repeatable)")
+    validate.add_argument("--fixture", metavar="SPEC",
+                          help="deployment fixture, as `module:factory` or a "
+                               ".py path; without one, properties needing a "
+                               "deployment are UNSUPPORTED rather than guessed")
+    validate.add_argument("--ignore-preflight", action="store_true",
+                          help="launch the backend even when preflight found a "
+                               "condition that makes a green result meaningless")
 
     campaign = sub.add_parser("campaign", help="manage campaign packs")
     campaign_sub = campaign.add_subparsers(dest="campaign_command", required=True)
@@ -604,6 +619,81 @@ def _watch(args) -> int:
 # update
 # ---------------------------------------------------------------------------
 
+def _pack_invariants(packs):
+    """The invariants an operator's campaign packs declare."""
+    if not packs:
+        return []
+    registry = discover_packs(packs=packs)
+    seen, out = set(), []
+    for campaign in registry.list_campaigns():
+        for invariant in campaign.invariants:
+            key = (invariant.statement, invariant.category)
+            if key not in seen:
+                seen.add(key)
+                out.append(invariant)
+    return out
+
+
+def _compile_pack_properties(args, contracts) -> int:
+    """Compile a pack's invariants into harnesses for the chosen backend.
+
+    This is the axis the execution engines leave open. They each verified the
+    five properties an operator wrote by hand — ~50 minutes and 1688 harness
+    lines for Foundry alone. A campaign pack already carries those properties
+    as `CampaignInvariant`s; compiling them is the difference between an engine
+    that tells you where to look and one that also hands the looking to a
+    prover.
+
+    A deployment fixture is still the operator's to supply: how an upgradeable
+    stack is wired, who the actors are, and how to build a call whose argument
+    is a signature or a Bitcoin transaction cannot be derived from sources
+    without inventing them. Crystal refuses to invent, and says so per property.
+    """
+    from .properties import compile_properties, split_report, write_compiled
+
+    invariants = _pack_invariants(getattr(args, "pack", None))
+    if not invariants:
+        return 0
+    fixture = _load_fixture(getattr(args, "fixture", None))
+    compiled = [
+        item for item in compile_properties(invariants, contracts, fixture)
+        if item.backend == args.backend
+    ]
+    if not compiled:
+        return 0
+    print(split_report(compiled))
+    ready = [item for item in compiled if not item.unsupported_reason]
+    if ready and args.out_dir:
+        written = write_compiled(ready, args.out_dir)
+        print(f"{len(written)} harness(es) written to {args.out_dir}")
+    elif ready:
+        print(f"{len(ready)} harness(es) compiled; pass --out-dir to persist them.")
+    if not fixture:
+        print("  no deployment fixture supplied (--fixture): properties that "
+              "need one are UNSUPPORTED rather than guessed.")
+    return len(ready)
+
+
+def _load_fixture(spec):
+    """Load a deployment fixture from `module:factory` or a .py file path."""
+    if not spec:
+        return None
+    import importlib
+    import importlib.util
+
+    target, _, attribute = str(spec).partition(":")
+    attribute = attribute or "fixture"
+    path = Path(target)
+    if path.suffix == ".py" and path.is_file():
+        loaded = importlib.util.spec_from_file_location("crystal._fixture", path)
+        module = importlib.util.module_from_spec(loaded)
+        loaded.loader.exec_module(module)
+    else:
+        module = importlib.import_module(target)
+    factory = getattr(module, attribute, None)
+    return factory() if callable(factory) else factory
+
+
 def _validate(args) -> int:
     from .discovery import discover as discover_sources
     from .parsers import parse_project
@@ -615,6 +705,47 @@ def _validate(args) -> int:
     contracts = parse_project(discover_sources(args.project)).contracts
     link_inheritance(contracts)
     invariants = derive_protocol_invariants(build_protocol_model(contracts))
+
+    # Before anything is launched: the traps that make a green run meaningless.
+    from .backends import preflight
+    report = preflight.run(args.project, contracts, args.backend)
+    # Only a refusal about code a property will actually run against blocks the
+    # launch. Two test fixtures sharing a name collide with each other and with
+    # nothing that matters; refusing on those would make the gate unusable and
+    # teach an operator to pass --ignore-preflight by reflex, which is how a
+    # safety check becomes decoration.
+    in_scope = {
+        c.name for c in contracts
+        if not getattr(c, "is_test", False) and c.kind != "interface"
+    }
+    refusals = [
+        issue for issue in report.issues
+        if issue.severity.lower() == "refuse" and issue.contract in in_scope
+    ]
+    # One ambiguous name affects every contract that imports it. That is one
+    # problem with N witnesses, not N problems — print it once and name them.
+    grouped: dict[tuple, list] = {}
+    for issue in report.issues:
+        grouped.setdefault((issue.severity, issue.kind, issue.name), []).append(issue)
+    for (severity, kind, name), items in sorted(
+        grouped.items(), key=lambda kv: (kv[0][0] != "refuse", kv[0][2])
+    )[:14]:
+        head = items[0]
+        affected = sorted({i.contract for i in items if i.contract})
+        print(head.line())
+        if len(affected) > 1:
+            print(f"    affects {len(affected)}: {', '.join(affected[:6])}"
+                  + (" ..." if len(affected) > 6 else ""))
+    if len(grouped) > 14:
+        print(f"  ... {len(grouped) - 14} further preflight finding(s)")
+    if refusals and not getattr(args, "ignore_preflight", False):
+        print(f"\n{len(refusals)} blocking issue(s): refusing to launch "
+              f"{args.backend}. A green run under these conditions would mean "
+              f"nothing. Pass --ignore-preflight to override.")
+        return 2
+
+    if _compile_pack_properties(args, contracts):
+        return 0
 
     if args.backend == "foundry":
         capabilities = detect_foundry()

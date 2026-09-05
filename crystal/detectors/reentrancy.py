@@ -34,6 +34,15 @@ from ..ir import (
     flatten_events,
 )
 from .base import DetectorSignal, REENTRANCY_GUARDS, has_modifier, signal
+from ..models import MOVE, RUST, SOLIDITY, VYPER
+
+# Re-entrancy is a property of an execution model where a callee can call back
+# into the caller before its state settles. Go has no such dispatch: measured on
+# a 548-file Go service this detector produced 51 signals, every one of them
+# "external call precedes state update" on an ordinary method, and none of them
+# about anything. The premise, not the syntax, decides where it runs.
+LANGUAGES = frozenset({SOLIDITY, RUST, MOVE, VYPER})
+
 
 DETECTOR = "reentrancy-ordering"
 
