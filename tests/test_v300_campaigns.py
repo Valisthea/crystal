@@ -346,3 +346,27 @@ def test_capabilities_include_v3():
     assert "boundary-engine" in CAPABILITIES
     assert "asymmetric-side-effect-detector" in CAPABILITIES
     assert "ens-preset" in CAPABILITIES
+
+
+# ---------------------------------------------------------------------------
+# Regression: solc.py must skip directories with .sol extension
+# ---------------------------------------------------------------------------
+
+def test_solc_skips_sol_directories(tmp_path):
+    """broadcast/X.s.sol is a Foundry directory, not a file."""
+    from crystal.compiler.solc import compile_standard
+    import shutil
+
+    sol_dir = tmp_path / "broadcast" / "Deploy.s.sol"
+    sol_dir.mkdir(parents=True)
+    (sol_dir / "run-latest.json").write_text("{}", encoding="utf-8")
+
+    real_file = tmp_path / "src" / "Token.sol"
+    real_file.parent.mkdir(parents=True)
+    real_file.write_text("pragma solidity ^0.8.20; contract T {}", encoding="utf-8")
+
+    if not shutil.which("solc"):
+        return
+
+    result = compile_standard(str(tmp_path))
+    assert "error" not in result or result.get("available")

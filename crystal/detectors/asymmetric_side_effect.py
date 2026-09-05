@@ -29,12 +29,27 @@ VALUE_OPERATIONS = frozenset({
     "transfer", "deposit_creating", "deposit_into_existing",
     "slash", "reward",
     "credit", "debit",
+    # Solidity internal-function variants (underscore-prefixed).
+    "_mint", "_burn", "_transfer",
+    "_safeMint", "_safeTransfer",
+    "transferFrom", "safeTransfer", "safeTransferFrom",
 })
 
 # Patterns that suggest an operation is initialisation/genesis (one-shot).
 GENESIS_HINTS = re.compile(
     r"genesis|initialize|init|bootstrap|setup|on_genesis", re.IGNORECASE
 )
+
+
+def _leaf_name(qualified: str) -> str:
+    """Extract the leaf function name from a qualified path.
+
+    Handles both Rust (``A::B::transfer``) and Solidity (``token.transfer``)
+    separators so the result can be matched against VALUE_OPERATIONS.
+    """
+    name = qualified.rsplit("::", 1)[-1]
+    name = name.rsplit(".", 1)[-1]
+    return name
 
 
 @dataclass
@@ -81,8 +96,7 @@ def _collect_call_sites(contracts, include_tests: bool = False):
             if function.ir:
                 for stmt in function.ir.walk():
                     if stmt.call is not None:
-                        callee = stmt.call.callee.rsplit("::", 1)[-1]
-                        callee_lower = callee.lower().replace("_", "")
+                        callee = _leaf_name(stmt.call.callee)
                         callees.add(callee)
 
                         base_callee = callee.split("(")[0].strip()
@@ -90,7 +104,7 @@ def _collect_call_sites(contracts, include_tests: bool = False):
                             value_calls.append((base_callee, stmt.call.line))
             else:
                 for call_name in function.calls:
-                    base = call_name.rsplit("::", 1)[-1].split("(")[0].strip()
+                    base = _leaf_name(call_name).split("(")[0].strip()
                     callees.add(base)
                     if base in VALUE_OPERATIONS:
                         value_calls.append((base, function.line))

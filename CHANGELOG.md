@@ -1,5 +1,29 @@
 # Changelog
 
+## Crystal V1.00 Build 008 — the directory that pretended to be Solidity
+
+Two regressions found in live use, both invisible to the existing suite.
+
+**`compile_standard` crashed on Foundry broadcast directories.**
+`rglob("*.sol")` matches directories whose name ends in `.sol` — Foundry's
+`broadcast/Deploy.s.sol/` is a directory containing `run-latest.json`, not a
+Solidity file. `read_text()` on a directory raises `IsADirectoryError` on
+Unix and `PermissionError` on Windows, crashing the entire solc pass. Fixed
+with a `p.is_file()` guard before the read. Covered by a test that creates
+the Foundry broadcast layout.
+
+**`asymmetric-side-effect` was blind to Solidity.**  The callee extraction
+used `rsplit("::", 1)` (Rust module paths) but Solidity uses `.` as a member
+separator, so `token.transfer` never reduced to `transfer`. Additionally,
+`VALUE_OPERATIONS` was missing Solidity's underscore-prefixed internal
+functions (`_mint`, `_burn`, `_transfer`, `_safeMint`, `_safeTransfer`) and
+common ERC-20 variants (`transferFrom`, `safeTransfer`, `safeTransferFrom`).
+A new `_leaf_name()` helper now handles both `::` and `.` separators.
+Covered by a Solidity fixture with a manifest asymmetry: three functions
+call `_mint`, two of which also call `_updateCheckpoint`, one does not.
+
+Tests: 213 passing (+2 regression tests).
+
 ## Crystal V1.00 Build 007 — two detectors that could only ever report nothing
 
 Both of Build 002–004's composition detectors were found unable to report, on

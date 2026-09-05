@@ -188,6 +188,51 @@ def test_selection_filters_detectors():
     assert analyze(REENTRANT, only=["access-control"]) == []
 
 
+# ---------------------------------------------------------------------------
+# Asymmetric side-effect detector — Solidity regression
+# ---------------------------------------------------------------------------
+
+ASYMMETRIC_SOLIDITY = """
+pragma solidity ^0.8.20;
+contract Vault {
+    mapping(address => uint256) public balances;
+    uint256 public totalShares;
+    event Checkpoint(address, uint256);
+
+    function _updateCheckpoint(address who) internal {
+        // accounting side-effect
+    }
+
+    function deposit(uint256 amount) external {
+        _mint(msg.sender, amount);
+        _updateCheckpoint(msg.sender);
+    }
+    function depositFor(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
+    function depositWithPermit(address to, uint256 amount) external {
+        _mint(to, amount);
+        _updateCheckpoint(to);
+    }
+
+    function _mint(address to, uint256 amount) internal {
+        balances[to] += amount;
+        totalShares += amount;
+    }
+}
+"""
+
+
+def test_asymmetric_side_effect_solidity():
+    """_mint is called in three sites; _updateCheckpoint is in two but not depositFor."""
+    signals = analyze(ASYMMETRIC_SOLIDITY, only=["asymmetric-side-effect"])
+    assert signals, "detector must fire on the manifest Solidity asymmetry"
+    flagged = {s.function for s in signals}
+    assert "depositFor" in flagged
+    assert "deposit" not in flagged
+    assert "depositWithPermit" not in flagged
+
+
 # Three settlement paths record a commitment leaf beside the credit; the fourth
 # credits and records nothing. This is the shape the detector exists to find.
 ASYMMETRIC_SETTLEMENT = """

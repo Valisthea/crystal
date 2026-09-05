@@ -14,6 +14,8 @@ def compile_standard(project):
     root = Path(project).resolve()
     sources = {}
     for p in root.rglob("*.sol"):
+        if not p.is_file():
+            continue
         if any(x in p.parts for x in {".git","node_modules","lib","out","cache"}):
             continue
         rel = p.relative_to(root).as_posix()
