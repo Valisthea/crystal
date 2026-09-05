@@ -24,8 +24,6 @@ def compose(result):
     out=[]
     for seq_obj in result["sequence_hypotheses"][:100]:
         seq=list(seq_obj.sequence)
-        if tuple(seq) not in impact_by_path:
-            continue
 
         edges=[]
         valid=True
@@ -37,9 +35,25 @@ def compose(result):
         if not valid:
             continue
 
-        impacts=impact_by_path[tuple(seq)]
-        mechanisms=sorted(set(x.category.split("-")[0] for x in impacts))
-        relevant=sorted(set().union(*(set(x.relevant_state) for x in impacts)))
+        impacts=impact_by_path.get(tuple(seq))
+        if impacts:
+            mechanisms=sorted(set(x.category.split("-")[0] for x in impacts))
+            relevant=sorted(set().union(*(set(x.relevant_state) for x in impacts)))
+        else:
+            # A chain can compose without touching an economic invariant. A
+            # protocol split across contracts composes by calling: the chain
+            # crosses a contract boundary and the callee writes state. Gating
+            # composition on accounting/oracle/fee invariants alone reports
+            # zero on a protocol that is nothing but composition.
+            crossing=[
+                e for e in edges
+                if e.edge_kind=="call-flow" and e.consumed
+                and e.source_contract!=e.target_contract
+            ]
+            if not crossing:
+                continue
+            mechanisms=["cross-contract"]
+            relevant=sorted(set().union(*(set(e.consumed) for e in crossing)))
         causal_score=sum(e.score for e in edges)/len(edges)
 
         # Longer, fully causal paths get a modest bonus; unsupported category

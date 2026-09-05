@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .. import ir as I
 from .base import DetectorSignal, signal
 
 DETECTOR = "asymmetric-side-effect"
@@ -34,6 +35,13 @@ VALUE_OPERATIONS = frozenset({
     "_safeMint", "_safeTransfer",
     "transferFrom", "safeTransfer", "safeTransferFrom",
 })
+
+# A guard is a companion side-effect like any other. Two entry points that
+# reach the same state transition, one behind an authority check and one not,
+# is the same asymmetry as one recording a leaf and the other not — and it is
+# the shape that actually ships, because the guarded path looks correct in
+# isolation and the unguarded one looks simple.
+GUARD_COMPANION = "<authorization-guard>"
 
 # Patterns that suggest an operation is initialisation/genesis (one-shot).
 GENESIS_HINTS = re.compile(
@@ -63,6 +71,7 @@ class _CallSite:
     is_test: bool = False
     is_genesis: bool = False
     language: str = "rust"
+    guards: tuple[str, ...] = ()
 
 
 class _Anchor:
@@ -93,8 +102,14 @@ def _collect_call_sites(contracts, include_tests: bool = False):
             callees: set[str] = set()
             value_calls: list[tuple[str, int]] = []
 
+            guards: list[str] = [f"modifier {m}" for m in function.modifiers]
+
             if function.ir:
                 for stmt in function.ir.walk():
+                    if stmt.kind == I.REQUIRE:
+                        guards.append(
+                            f"L{stmt.line} {stmt.text.strip()[:80]}"
+                        )
                     if stmt.call is not None:
                         callee = _leaf_name(stmt.call.callee)
                         callees.add(callee)
@@ -108,6 +123,9 @@ def _collect_call_sites(contracts, include_tests: bool = False):
                     callees.add(base)
                     if base in VALUE_OPERATIONS:
                         value_calls.append((base, function.line))
+
+            if guards:
+                callees.add(GUARD_COMPANION)
 
             is_genesis = bool(GENESIS_HINTS.search(function.name))
 
@@ -123,6 +141,7 @@ def _collect_call_sites(contracts, include_tests: bool = False):
                     is_test=function.is_test,
                     is_genesis=is_genesis,
                     language=getattr(function, "language", "rust"),
+                    guards=tuple(guards),
                 ))
 
     return sites
@@ -151,10 +170,14 @@ def _find_asymmetries(sites: list[_CallSite]):
             for comp in site.companions:
                 companion_counts[comp] = companion_counts.get(comp, 0) + 1
 
+        total = len(production_sites)
         for companion, count in companion_counts.items():
-            if count < 2:
+            # A companion seen once out of many is noise, not a convention.
+            # But with exactly two equivalent sites, "one does, one does not"
+            # is the whole signal — requiring two witnesses made the minimal
+            # asymmetry, a pair of sibling entry points, unreportable.
+            if count < 2 and total > 2:
                 continue
-            total = len(production_sites)
             if count >= total:
                 continue
 
@@ -191,10 +214,12 @@ def detect(
     signals: list[DetectorSignal] = []
 
     for asym in asymmetries:
+        label = ("an authorization guard"
+                 if asym["companion"] == GUARD_COMPANION else asym["companion"])
         for missing_site in asym["without"]:
             evidence = [
                 f"primary operation: {asym['operation']}",
-                f"expected companion: {asym['companion']}",
+                f"expected companion: {label}",
                 f"companion present in {asym['count']}/{asym['total']} sites",
             ]
             for ws in asym["with"][:3]:
@@ -205,6 +230,11 @@ def detect(
                 evidence.append(
                     f"  companion MISSING: {wos.function} ({wos.path}:{wos.line})"
                 )
+
+            if asym["companion"] == GUARD_COMPANION:
+                for ws in asym["with"][:3]:
+                    for guard in ws.guards[:2]:
+                        evidence.append(f"  guard on {ws.function}: {guard}")
 
             observed_instead = sorted(
                 missing_site.companions - {asym["companion"]}
@@ -224,8 +254,8 @@ def detect(
             ]
 
             falsification = [
-                f"Is there a sweep/backfill that calls {asym['companion']} retroactively?",
-                f"Is {asym['companion']} called elsewhere with the same key?",
+                f"Is there a sweep/backfill that applies {label} retroactively?",
+                f"Is {label} enforced elsewhere on the same path?",
                 "Is the missing side-effect intentional (documented exception)?",
                 f"Does {asym['operation']} have a different accounting path in this context?",
             ]
@@ -233,7 +263,7 @@ def detect(
             signals.append(signal(
                 detector=DETECTOR,
                 title=(
-                    f"{asym['operation']} without {asym['companion']} "
+                    f"{asym['operation']} without {label} "
                     f"in {missing_site.function}"
                 ),
                 function=_Anchor(missing_site),
@@ -241,7 +271,7 @@ def detect(
                 confidence=asym["confidence"],
                 reason=(
                     f"{missing_site.function} calls {asym['operation']} without "
-                    f"the companion {asym['companion']} that "
+                    f"{label}, which "
                     f"{asym['count']}/{asym['total']} equivalent sites include"
                 ),
                 evidence=evidence,

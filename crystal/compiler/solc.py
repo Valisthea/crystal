@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 
 from .. import process
+from ..paths import BUILD_ARTIFACTS, rglob_files
 
 def available():
     return shutil.which("solc") is not None
@@ -13,11 +14,7 @@ def compile_standard(project):
 
     root = Path(project).resolve()
     sources = {}
-    for p in root.rglob("*.sol"):
-        if not p.is_file():
-            continue
-        if any(x in p.parts for x in {".git","node_modules","lib","out","cache"}):
-            continue
+    for p in rglob_files(root, "*.sol", BUILD_ARTIFACTS):
         rel = p.relative_to(root).as_posix()
         sources[rel] = {"content": p.read_text(encoding="utf-8", errors="ignore")}
 

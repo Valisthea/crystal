@@ -80,6 +80,9 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--include-tests", action="store_true",
                       help="research test fixtures too (excluded by default: a mock "
                            "runtime produces deltas and unguarded writes by design)")
+    scan.add_argument("--pack", action="append", metavar="PACK",
+                      help="load a campaign pack by dotted module or .py file "
+                           "path (repeatable)")
     scan.add_argument("--quiet", "-q", action="store_true")
 
     sub.add_parser("capabilities", help="list engine capabilities")
@@ -109,7 +112,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     campaign = sub.add_parser("campaign", help="manage campaign packs")
     campaign_sub = campaign.add_subparsers(dest="campaign_command", required=True)
-    campaign_sub.add_parser("list", help="list registered campaigns")
+    campaign_list = campaign_sub.add_parser(
+        "list", help="list registered campaigns")
+    campaign_list.add_argument("--pack",
+                               help="load an extra pack by module path")
     campaign_run = campaign_sub.add_parser("run",
                                            help="run a campaign against a project")
     campaign_run.add_argument("campaign_id")
@@ -238,6 +244,7 @@ def _run_scan(args) -> dict:
         use_foundry=not getattr(args, "no_foundry", False),
         detectors=selected,
         include_tests=getattr(args, "include_tests", False),
+        packs=getattr(args, "pack", None) or (),
     )
 
 
@@ -431,8 +438,9 @@ def _campaign(args) -> int:
     from .campaigns import run_campaign as run_single_campaign
 
     registry = discover_packs()
-    if args.pack:
-        registry.load_pack(args.pack)
+    pack = getattr(args, "pack", None)
+    if pack:
+        registry.load_pack(pack)
 
     if args.campaign_command == "list":
         print(f"crystal {__version__} build {__build__}")

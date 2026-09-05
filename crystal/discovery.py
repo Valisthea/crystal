@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .parsers.base import LANGUAGE_BY_SUFFIX, SUPPORTED_SUFFIXES
+from .paths import rglob_files
 
 SKIP = {
     ".git", "node_modules", "lib", "cache", "out", "artifacts", ".venv",
@@ -51,7 +52,7 @@ def discover(project, languages=None) -> list[Path]:
     for suffix in SUPPORTED_SUFFIXES:
         if wanted and LANGUAGE_BY_SUFFIX[suffix] not in wanted:
             continue
-        found.extend(p for p in root.rglob(f"*{suffix}") if _keep(p))
+        found.extend(p for p in rglob_files(root, f"*{suffix}") if _keep(p))
     return sorted(found)
 
 
@@ -68,7 +69,7 @@ def profile(project, sources=None) -> ProjectProfile:
 
     frameworks: set[str] = set()
     manifests: list[str] = []
-    for manifest in list(root.rglob("Cargo.toml"))[:200]:
+    for manifest in list(rglob_files(root, "Cargo.toml"))[:200]:
         if not _keep(manifest):
             continue
         manifests.append(str(manifest))

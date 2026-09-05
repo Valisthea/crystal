@@ -31,6 +31,9 @@ class CampaignCandidate:
     reproduction: tuple[str, ...] = ()
     suggested_next_action: str = ""
     score: float = 0.0
+    # The campaign's own open questions, carried to whoever investigates this
+    # candidate. Crystal does not answer them; it says which ones apply.
+    questions: tuple[str, ...] = ()
 
 
 @dataclass
@@ -43,6 +46,9 @@ class CampaignResult:
     total_sequences_explored: int = 0
     total_sequences_pruned: int = 0
     warning: str = ""
+    # Which scope rule rejected how many sequences, so a campaign that reported
+    # nothing says why rather than looking like a clean result.
+    pruned_by: dict[str, int] = field(default_factory=dict)
 
     @property
     def top_candidates(self) -> list[CampaignCandidate]:

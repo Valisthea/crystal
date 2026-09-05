@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import process
+from ..paths import rglob_files
 
 ATTACKER = "address(0xA11CE)"
 VICTIM = "address(0xB0B)"
@@ -119,7 +120,7 @@ def _locate_source(project, contract) -> Path | None:
     direct = root / f"{contract.name}.sol"
     if direct.exists():
         return direct
-    for found in root.rglob(f"{contract.name}.sol"):
+    for found in rglob_files(root, f"{contract.name}.sol"):
         return found
     return None
 

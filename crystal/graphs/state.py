@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .. import ir as I
 from ..naming import StateNamespace, bare_name
+from .binding import build_bindings
 
 
 # ── State classification ────────────────────────────────────────────────
@@ -166,6 +168,7 @@ EDGE_KIND_SCORES = {
     "temporal-action": 0.72,
     "registry-action": 0.68,
     "balance-transfer": 0.70,
+    "call-flow": 0.66,
 }
 
 
@@ -313,7 +316,78 @@ def build_state_graph(contracts):
                 key_relation=key_rel,
             ))
 
+    sg.causal_edges.extend(_call_edges(contracts, fn_meta))
     return sg
+
+
+def _call_edges(contracts, fn_meta) -> list[CausalEdge]:
+    """Edges for calls that cross a contract boundary through a declared type.
+
+    Storage-sharing is not the only way two functions compose. A protocol split
+    across contracts composes by *calling*: `PegOutContract.refundPegOut` reaches
+    `CollateralManagement.slashPegOutCollateral` through an interface-typed
+    handle, and no storage is shared at any point. Without these edges a
+    protocol that is nothing but composition yields an empty causal graph, and
+    every downstream engine that walks it — sequence generation, composition
+    candidates, order sensitivity, campaigns — reports nothing on the very
+    shape it exists to find.
+
+    Only receivers that resolve through a declared type produce an edge. A bare
+    name match would connect any two contracts that happen to share a method
+    name, which is the mistake namespacing exists to undo.
+    """
+    bindings = build_bindings(contracts)
+    edges: list[CausalEdge] = []
+    seen: set[tuple[str, str, int]] = set()
+
+    for contract in contracts:
+        for function in contract.functions:
+            if function.ir is None:
+                continue
+            source = f"{contract.name}.{function.name}"
+            source_trans = fn_meta.get(source)
+            if source_trans is None:
+                continue
+            for call in function.ir.calls():
+                if call.kind not in I.EXTERNAL_CALL_KINDS or not call.receiver:
+                    continue
+                for target, confidence in bindings.resolve(
+                    contract.name, call.receiver, call.callee
+                ):
+                    target_trans = fn_meta.get(target)
+                    if target_trans is None or target == source:
+                        continue
+                    key = (source, target, call.line)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    # The callee's own writes are what the call sets in motion,
+                    # so they are what a later step can consume.
+                    consumed = tuple(sorted(target_trans.writes))
+                    produced = tuple(sorted(source_trans.writes))
+                    categories = tuple(sorted({
+                        classify_state(name) for name in consumed
+                    }))
+                    score = min(0.95, confidence + 0.02 * len(consumed))
+                    edges.append(CausalEdge(
+                        source=source,
+                        target=target,
+                        produced=produced,
+                        consumed=consumed,
+                        score=round(score, 3),
+                        edge_kind="call-flow",
+                        categories=categories,
+                        source_contract=contract.name,
+                        target_contract=target_trans.contract,
+                        source_path=source_trans.path,
+                        target_path=target_trans.path,
+                        source_line=call.line,
+                        target_line=target_trans.line,
+                        key_relation="declared-type",
+                        condition=f"{call.receiver}.{call.callee}",
+                    ))
+    return edges
 
 
 # ── Sequence candidate generation ───────────────────────────────────────

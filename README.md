@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 009</h1>
+<h1 align="center">Crystal V1.00 Build 010</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -13,7 +13,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-232%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-253%20passing-brightgreen">
 </p>
 
 ---
@@ -101,6 +101,7 @@ Crystal degrades to regex parsers and says so, rather than failing.
 | `crystal doctor` | report environment readiness |
 | `crystal watch <target>` | re-scan on file change, for use during an audit |
 | `crystal validate <target> --backend medusa` | run an execution backend on generated harnesses |
+| `crystal scan <target> --pack <pack>` | load an operator campaign pack (dotted module or `.py` path) |
 | `crystal campaign list` | list registered campaign packs |
 | `crystal campaign run <id> <target>` | run a single campaign against a project |
 | `crystal capabilities` | list engine capabilities |
@@ -118,7 +119,13 @@ crystal scan ./target --detectors reentrancy,access-control
 crystal scan ./target --no-treesitter          # force the fallback parsers
 crystal scan ./target --no-foundry             # skip real-EVM execution
 crystal scan ./target --include-tests          # research fixtures too
+crystal scan ./target --pack ./packs/flyover.py            # operator campaign pack
+crystal scan ./target --pack crystal.packs.ens             # or a dotted module
 ```
+
+`--pack` is repeatable. Campaigns run on every scan and are reported in every
+format, including the ones that found nothing and why they pruned — a campaign
+that reported nothing searched its scope, which is a result, not an absence.
 
 Output formats: `json`, `markdown`, `sarif`, `arcadia`.
 
@@ -133,7 +140,7 @@ Output formats: `json`, `markdown`, `sarif`, `arcadia`.
 | `unbounded-input-in-value-op` | a caller-chosen value with no upper bound reaches the amount position of a value operation |
 | `ignored-outcome-in-settlement` | a settlement frame is handed the operation's result, discards it, and moves value anyway |
 | `pipeline-guard-bypass` | one stage of a runtime pipeline moves value through a mechanism another stage's guard does not cover |
-| `asymmetric-side-effect` | a value operation is performed without a companion side-effect that most equivalent code paths include |
+| `asymmetric-side-effect` | a value operation is performed without a companion side-effect — a call *or an authorization guard* — that most equivalent code paths include |
 
 Every signal carries a line-anchored ordered trace and a falsification list, and
 is `RESEARCH` status. None of them can produce a confirmed finding.
@@ -293,6 +300,33 @@ runtime mutates state and skips authority checks *by design*, so leaving it in
 means every signal lands on the test builder rather than on production code.
 They are still parsed and still listed, under `excluded_test_contracts`;
 `--include-tests` restores them.
+
+### Composition across contracts
+
+A protocol split across contracts composes by *calling*, not by sharing
+storage:
+
+```solidity
+ICollateralManagement _collateralManagement;          // PegOutContract
+...
+_collateralManagement.slashPegOutCollateral(who, amount);
+```
+
+Read `PegOutContract` alone and that call goes nowhere: the callee is declared
+in an interface with no body. Crystal binds the declared type to the contract
+that implements it, so the call becomes a causal edge and the chain is
+reportable:
+
+```
+PegOutContract.refundPegOut -> CollateralManagement.slashPegOutCollateral
+  call-flow via _collateralManagement.slashPegOutCollateral
+  consumed: CollateralManagement::collateral, CollateralManagement::slashed
+```
+
+Binding is by **declared type, never by bare function name** — two contracts
+can both define `settle` without being the same `settle`. A protocol whose
+contracts share no storage at any point therefore still produces a causal
+graph, where before it produced an empty one.
 
 ### Cross-module composition
 

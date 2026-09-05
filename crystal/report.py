@@ -73,9 +73,68 @@ def _campaign_payload(result) -> list[dict]:
             "deferred": cr.deferred,
             "total_sequences_explored": cr.total_sequences_explored,
             "total_sequences_pruned": cr.total_sequences_pruned,
+            "pruned_by": dict(getattr(cr, "pruned_by", {}) or {}),
             "warning": cr.warning,
         })
     return out
+
+
+def _campaign_markdown(data) -> list[str]:
+    """Render campaigns, including the ones that reported nothing.
+
+    A campaign that found nothing is a result, not an absence: it says the
+    scope was searched. Printing only the productive ones makes a pack that
+    never loaded look identical to a pack that loaded and stayed quiet.
+    """
+    campaigns = data.get("campaign_results") or []
+    packs = data.get("campaign_packs") or {}
+    lines = ["", "## Campaigns", ""]
+
+    if packs:
+        for spec, count in sorted(packs.items()):
+            state = f"{count} campaign(s)" if count else "loaded nothing"
+            lines.append(f"- requested pack `{spec}` — {state}")
+        lines.append("")
+
+    if not campaigns:
+        lines.append("No campaign ran on this target.")
+        return lines
+
+    productive = [c for c in campaigns if c["candidates"]]
+    lines.append(
+        f"{len(campaigns)} campaign(s) ran; {len(productive)} produced candidates."
+    )
+    lines += ["", "| Campaign | Candidates | Explored | Pruned | Why pruned |",
+              "| --- | ---: | ---: | ---: | --- |"]
+    for campaign in campaigns:
+        why = ", ".join(
+            f"{rule}={count}"
+            for rule, count in sorted((campaign.get("pruned_by") or {}).items())
+        ) or "—"
+        lines.append(
+            f"| `{campaign['campaign_id']}` | {len(campaign['candidates'])} "
+            f"| {campaign['total_sequences_explored']} "
+            f"| {campaign['total_sequences_pruned']} | {why} |"
+        )
+
+    for campaign in productive:
+        lines += ["", f"### {campaign['campaign_name']} "
+                      f"(`{campaign['campaign_id']}`)", ""]
+        if campaign.get("warning"):
+            lines.append(f"> {campaign['warning']}")
+            lines.append("")
+        for candidate in campaign["candidates"][:5]:
+            lines.append(
+                f"- **{' -> '.join(candidate['state_sequence'])}** — "
+                f"score {candidate['score']:.2f}, "
+                f"category `{candidate['category']}`"
+            )
+            lines.append(f"  - {candidate['hypothesis']}")
+            for item in list(candidate.get("evidence") or [])[:6]:
+                lines.append(f"  - {item}")
+            for question in list(candidate.get("questions") or [])[:4]:
+                lines.append(f"  - open question: {question}")
+    return lines
 
 
 def _composition_payload(model) -> dict:
@@ -255,6 +314,7 @@ def payload(result):
             asdict(x) for x in result.get("research_candidates", [])[:1000]
         ],
         "campaign_results": _campaign_payload(result),
+        "campaign_packs": dict(result.get("campaign_packs") or {}),
         "quality_report": _plain(quality),
     }
 
@@ -415,6 +475,8 @@ def markdown(data, result=None) -> str:
             )
     else:
         lines.append("No protocol invariant candidate derived.")
+
+    lines += _campaign_markdown(data)
 
     lines += ["", "## Concrete validation", ""]
     for item in data["concrete_validation"][:100]:

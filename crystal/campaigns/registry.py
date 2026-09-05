@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import sys
 from pathlib import Path
 
 from .definition import CampaignDefinition
+from ..paths import glob_files
 
 
 class CampaignRegistry:
@@ -14,6 +17,9 @@ class CampaignRegistry:
     def __init__(self) -> None:
         self._campaigns: dict[str, CampaignDefinition] = {}
         self._packs: dict[str, list[str]] = {}
+        # What each explicitly requested pack contributed, so a pack that
+        # loaded zero campaigns is reported instead of silently ignored.
+        self.load_report: dict[str, int] = {}
 
     def register(self, campaign: CampaignDefinition) -> None:
         self._campaigns[campaign.campaign_id] = campaign
@@ -48,28 +54,85 @@ class CampaignRegistry:
         return len(campaigns)
 
 
-def discover_packs(extra_dirs: list[Path] | None = None) -> CampaignRegistry:
-    """Build a registry from built-in packs and optional extra directories."""
+BUILTIN_PACKS = (
+    "crystal.packs.generic",
+    "crystal.packs.defi",
+    "crystal.packs.registry",
+    "crystal.packs.authorization",
+    "crystal.packs.migration",
+    "crystal.packs.economic",
+)
+
+
+def load_pack_file(registry: "CampaignRegistry", path) -> int:
+    """Load a pack from a `.py` file anywhere on disk.
+
+    A pack the operator wrote lives next to their engagement, not inside
+    Crystal's own package, so importing it by dotted module name can never
+    reach it. This loads the file directly under a private module name.
+    """
+    path = Path(path).resolve()
+    if not path.is_file():
+        return 0
+    spec = importlib.util.spec_from_file_location(
+        f"crystal._userpack_{path.stem}", path
+    )
+    if spec is None or spec.loader is None:
+        return 0
+    module = importlib.util.module_from_spec(spec)
+    # Registered before exec so a pack that imports itself does not recurse.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        return 0
+    campaigns = getattr(module, "CAMPAIGNS", [])
+    for campaign in campaigns:
+        registry.register(campaign)
+    return len(campaigns)
+
+
+def load_packs(registry: "CampaignRegistry", specs) -> dict[str, int]:
+    """Load each spec, accepting a dotted module path or a filesystem path.
+
+    Returns what each spec contributed, so a pack that resolved to nothing is
+    reported rather than silently ignored — a campaign pack that loads zero
+    campaigns is indistinguishable from a working one at the output.
+    """
+    loaded: dict[str, int] = {}
+    for spec in specs or []:
+        text = str(spec)
+        candidate = Path(text)
+        if text.endswith(".py") or candidate.exists():
+            loaded[text] = load_pack_file(registry, candidate)
+        else:
+            loaded[text] = registry.load_pack(text)
+    return loaded
+
+
+def discover_packs(extra_dirs: list[Path] | None = None,
+                   packs=()) -> CampaignRegistry:
+    """Build a registry from built-in packs, extra directories and explicit packs.
+
+    `packs` accepts dotted module paths (`crystal.packs.ens`) and filesystem
+    paths to a `.py` file, which is how an operator's own pack gets in.
+    """
     registry = CampaignRegistry()
 
-    builtin = [
-        "crystal.packs.generic",
-        "crystal.packs.defi",
-        "crystal.packs.registry",
-        "crystal.packs.authorization",
-        "crystal.packs.migration",
-        "crystal.packs.economic",
-    ]
-    for module in builtin:
+    for module in BUILTIN_PACKS:
         registry.load_pack(module)
 
     for directory in extra_dirs or []:
+        directory = Path(directory)
         if not directory.is_dir():
             continue
-        for path in sorted(directory.glob("*.py")):
+        for path in sorted(glob_files(directory, "*.py")):
             if path.name.startswith("_"):
                 continue
-            module_name = f"crystal.packs.{path.stem}"
-            registry.load_pack(module_name)
+            # Try it as a Crystal-internal pack first, then as a loose file.
+            if not registry.load_pack(f"crystal.packs.{path.stem}"):
+                load_pack_file(registry, path)
 
+    registry.load_report = load_packs(registry, packs)
     return registry

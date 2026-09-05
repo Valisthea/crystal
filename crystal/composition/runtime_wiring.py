@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..parsers.base import is_test_source
+from ..paths import rglob_files
 
 # `#[runtime::pallet_index(3)] pub type TransactionPayment = pallet_transaction_payment;`
 MODERN_PALLET_RE = re.compile(
@@ -99,10 +100,10 @@ def profile_workspace(root, sources=()) -> WorkspaceProfile:
     root_path = Path(root).resolve()
     profile = WorkspaceProfile(str(root_path))
 
-    manifests = [
-        path for path in root_path.rglob("Cargo.toml")
-        if not any(part in {"target", ".git", "node_modules"} for part in path.parts)
-    ][:400]
+    manifests = list(rglob_files(
+        root_path, "Cargo.toml",
+        frozenset({"target", ".git", "node_modules"}),
+    ))[:400]
     profile.crate_manifests = [str(path) for path in manifests]
     for manifest in manifests:
         text = manifest.read_text(encoding="utf-8", errors="ignore")

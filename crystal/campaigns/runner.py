@@ -7,6 +7,7 @@ and return top-K candidates per campaign.
 
 from __future__ import annotations
 
+from ..graphs.state import classify_state
 from ..naming import bare_name
 from ..quality.normalize import stable_id
 from .definition import CampaignDefinition
@@ -43,6 +44,12 @@ def run_campaign(
     seen_sequences: set[tuple[str, ...]] = set()
     explored = 0
     pruned = 0
+    pruned_by: dict[str, int] = {}
+
+    def prune(rule: str) -> None:
+        nonlocal pruned
+        pruned += 1
+        pruned_by[rule] = pruned_by.get(rule, 0) + 1
 
     # Mine candidates from state deltas.
     for delta in state_deltas:
@@ -50,16 +57,24 @@ def run_campaign(
         explored += 1
 
         if len(seq) > scope.max_sequence_length:
-            pruned += 1
+            prune("max_sequence_length")
             continue
 
         fn_contracts = {s.split(".")[0] for s in seq if "." in s}
         if scoped_names and not fn_contracts & scoped_names:
-            pruned += 1
+            prune("allowed_contracts")
+            continue
+
+        # A campaign that names functions means them: every step of the
+        # sequence must be in scope, not merely its contract.
+        if scope.allowed_functions and not all(
+            scope.accepts_function(name) for name in seq
+        ):
+            prune("allowed_functions")
             continue
 
         if seq in seen_sequences:
-            pruned += 1
+            prune("duplicate")
             continue
         seen_sequences.add(seq)
 
@@ -75,11 +90,30 @@ def run_campaign(
                     edge_kinds.append(edge.edge_kind)
                     categories.extend(edge.categories)
 
+        # Causal edges only exist between entry points that share state. When
+        # there are none, the delta still says what moved, and that is enough
+        # to categorise the candidate — otherwise `allowed_categories` would
+        # only ever apply to sequences the graph happened to connect.
+        if not categories:
+            categories = sorted({classify_state(name) for name in delta.changed})
+
+        if scope.allowed_categories and categories and not any(
+            scope.accepts_category(category) for category in categories
+        ):
+            prune("allowed_categories")
+            continue
+
+        if scope.allowed_state and not any(
+            bare_name(name) in scope.allowed_state for name in delta.changed
+        ):
+            prune("allowed_state")
+            continue
+
         if campaign.transitions and not any(
             campaign.matches_transition(ek) for ek in edge_kinds
         ):
             if edge_kinds:
-                pruned += 1
+                prune("transitions")
                 continue
 
         # Find matching novelty.
@@ -129,6 +163,8 @@ def run_campaign(
                 ):
                     evidence.append(f"invariant-candidate: {inv.statement}")
                     break
+        for question in campaign.questions:
+            evidence.append(f"campaign-question: {question}")
 
         # Hypothesis text.
         hypothesis = _build_hypothesis(campaign, delta, edge_kinds, categories)
@@ -150,6 +186,7 @@ def run_campaign(
             evidence=tuple(evidence),
             suggested_next_action="Arcadia: investigate exploitability",
             score=components.final,
+            questions=tuple(campaign.questions),
         ))
 
     # Sort and limit.
@@ -170,6 +207,7 @@ def run_campaign(
         deferred=deferred,
         total_sequences_explored=explored,
         total_sequences_pruned=pruned,
+        pruned_by=dict(sorted(pruned_by.items())),
     )
 
 

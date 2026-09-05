@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .. import process
 from .ast import CompilerModel, ASTContract, ASTFunction, ASTStateVariable, SourceLocation
+from ..paths import BUILD_ARTIFACTS, rglob_files
 
 
 def _source_location(node, filename, text):
@@ -40,9 +41,7 @@ def parse_solc_ast(project):
     root = Path(project).resolve()
     sources = {}
     texts = {}
-    for p in root.rglob("*.sol"):
-        if any(x in p.parts for x in {".git", "node_modules", "lib", "out", "cache", "artifacts"}):
-            continue
+    for p in rglob_files(root, "*.sol", BUILD_ARTIFACTS):
         rel = p.relative_to(root).as_posix()
         text = p.read_text(encoding="utf-8", errors="ignore")
         texts[rel] = text

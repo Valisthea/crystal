@@ -48,7 +48,7 @@ def _unbounded_by_contract(signals) -> dict[str, list[str]]:
 
 
 def research(project, use_solc=True, languages=None, run_detector_pass=True,
-             use_foundry=True, detectors=None, include_tests=False):
+             use_foundry=True, detectors=None, include_tests=False, packs=()):
     sources = discover(project, languages=languages)
     parsed = parse_project(sources)
     all_contracts = parsed.contracts
@@ -139,8 +139,10 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
     result["research_candidates"] = build_candidates(result)
 
     # Campaign system: run enabled campaigns against the completed result.
-    registry = discover_packs()
+    # `packs` carries operator-written packs, by dotted module or by file path.
+    registry = discover_packs(packs=packs)
     result["campaign_registry"] = registry
+    result["campaign_packs"] = dict(registry.load_report)
     result["campaign_results"] = run_campaigns(
         registry.enabled(), result, top_global=3,
     )

@@ -1,5 +1,72 @@
 # Changelog
 
+## Crystal V1.00 Build 010 — the pack that loaded, and was never asked
+
+Five defects from live use. Four of them shared a failure mode: a mechanism
+that worked, wired to nothing, reporting a clean result.
+
+**A campaign pack could not reach the analysis path.** `discover_packs()`
+imported six hardcoded `crystal.packs.*` modules and nothing else. An operator's
+pack lives beside their engagement, so its dotted name resolves nowhere, and the
+`extra_dirs` branch built `crystal.packs.{stem}` — reachable only for files
+already inside Crystal's own package. `scan` never passed `extra_dirs` and had
+no flag to. So a pack that loaded fine under `campaigns_for_pack()` changed scan
+output by not one byte. Packs now load from a filesystem path as well as a
+module, `scan --pack` is repeatable, and what each requested pack contributed is
+reported — a pack that loaded zero campaigns is no longer indistinguishable from
+one that loaded and stayed quiet.
+
+**Two thirds of the scope API was dead.** `accepts_function` and
+`accepts_category` were defined, tested, and never called; only
+`accepts_contract` was. Categories now fall back to classifying the delta's own
+changed state when the causal graph supplies none, so `allowed_categories`
+applies to every candidate rather than only to sequences the graph happened to
+connect. `allowed_state` is enforced too. Every rejection is attributed:
+`pruned_by` says which rule rejected how many sequences, and it is rendered.
+
+**Campaign questions went nowhere.** `CampaignDefinition.questions` was read by
+no code at all. Questions now reach the candidate and the evidence, next to the
+invariant associations that were already there.
+
+**Campaigns were invisible in Markdown.** They were serialised into JSON and the
+Arcadia handoff and omitted from the Markdown writer entirely. There is now a
+Campaigns section listing every campaign that ran — including the quiet ones and
+why they pruned.
+
+**Composition reported zero on a protocol that is only composition.** The causal
+graph linked functions that share *storage*. A protocol split across contracts
+shares none: it composes by calling through an interface-typed handle, and the
+callee is declared in an interface with no body. Five contracts calling each
+other constantly produced an empty graph, and every engine that walks it —
+sequence generation, composition candidates, order sensitivity, campaigns —
+correctly reported nothing about it. Crystal now binds a declared type to the
+contracts implementing it and emits `call-flow` edges across the boundary.
+Binding is by declared type, never by bare function name: two contracts can both
+define `settle` without being the same `settle`. `compose()` also no longer
+requires an accounting/oracle/fee invariant to exist — a chain that crosses a
+contract boundary and moves the callee's state is a composition candidate on
+structural grounds.
+
+**`asymmetric-side-effect` could not report the minimal asymmetry.** A companion
+needed two witnesses, so two sibling entry points — one guarded, one not — could
+never be reported: the guarded one is a single witness. Worse, guards were not
+companions at all; only calls were. The detector now treats an authorization
+guard as the side-effect it is, admits the two-site case, and names the guard
+the other path has rather than only counting it.
+
+**`rglob("*.sol")` matched Foundry directories in six more places.** Build 008
+guarded `compiler/solc.py`. The same shape was live in `semantics/solc_ast.py`,
+`research/foundry.py`, `discovery.py` (twice), `composition/runtime_wiring.py`
+and `campaigns/registry.py`, so a whole-repository scan of any Foundry project
+with deployment history still died. All seven now go through `crystal/paths.py`;
+the convention is a function.
+
+**`crystal campaign list` crashed before printing.** The `list` subparser never
+declared `--pack` while the handler read `args.pack` unconditionally. `list`
+takes `--pack` now, and the read is defensive.
+
+Tests: 253 passing (+21).
+
 ## Crystal V1.00 Build 009 — two contracts, one variable, no way to tell
 
 Crystal identified every state variable by its bare name. `balances` was
