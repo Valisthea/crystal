@@ -10,10 +10,11 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Valisthea/crystal/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Valisthea/crystal/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-471%20passing-brightgreen">
+  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-471%20passing-brightgreen">
   <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -77,6 +78,60 @@ behave asymmetrically?"*
 It also reads **across** modules. Some defects are absent from every file taken
 alone and exist only in how a runtime wires modules together — see
 [Cross-module composition](#cross-module-composition).
+
+### Measured against the execution engines
+
+One bridge, 17 contracts, five properties — one of them known to be false.
+Rootstock Flyover, 2026-09-05, on Windows 11 with solc 0.8.25.
+
+| | **Crystal 015** | Foundry 1.6.0 | Medusa 1.5.1 | Halmos 0.3.3 |
+| --- | --- | --- | --- | --- |
+| Nature | static, derives its own leads | stateful fuzzing | property fuzzing | symbolic execution |
+| Human input for a first lead | none | — | — | — |
+| Human input to verify the five | a **293-line deployment fixture** | 1,688 harness lines | harness + config | 12 files + repairs |
+| Time to a first meaningful result | **3 s** | ~50 min | ~9 min then 1 h 45 of vacuity traps | ~7 min then ~1 h of blockages |
+| Machine time | 3 s | 12 min | 33 min | 2 h 03 |
+| P1 · P2 · P4 (sound) | compiles harnesses | held | held | proved |
+| P5 (the real defect) | **named, 0.77, no direction given** | violated, 2 calls | violated, 15 s | counterexample |
+| Non-vacuity proof | **required — `HELD` is unconstructable without one** | 16/16 actions succeeded | 51 % success | 21 checks |
+| Pre-flight refusal | **yes — homonyms, unfunded actors, unmodellable precompiles** | — | — | — |
+
+**Read the last two rows first.** They are the axis, and they are the reason
+this table exists at all.
+
+The dominant failure mode of these tools is not the false positive, it is the
+**silent success**. Measured on this one target: Medusa returned 35 green tests
+over 1,049,043 calls with **zero successful deposits**, because the actors had
+no balance. Medusa and Halmos both linked the wrong library, because the
+repository declares `Quotes.sol` twice — and the copy the toolchain binds is
+not even stable between builds. Halmos pins `block.number` to 1, so any branch
+behind a block delay is unreachable and returns `PASS`. The project's own
+invariant suite ran 64,000 times at 81 % reverts on a contract whose balance
+never left zero.
+
+None of those is a wrong answer. They are all green.
+
+So Crystal never reports a property as held without an execution witness — the
+sequences run, the per-action success ratio, the decoded revert selectors, and
+proof that a transition mutating the property's own state actually succeeded.
+Without it the verdict is `VACUOUS`, and `HELD` raises rather than being
+constructed. And it refuses to launch a backend at all when the run could only
+be meaningless.
+
+**What Crystal does not do.** It does not fuzz, does not prove, and produces no
+counterexample. Chasing Medusa's 1,317 calls a second or Halmos's SMT solver
+would produce a bad clone of both. Use it first, to know where to point the
+properties you are about to write — then use them.
+
+```mermaid
+flowchart LR
+    C["<b>Crystal</b><br/>3 s, nothing written<br/><i>where do I look?</i>"]
+    F["<b>Foundry</b><br/>write the property there<br/><i>is it true, at what cost?</i>"]
+    M["<b>Medusa</b><br/>volume, vacuity gate first<br/><i>how often, by which paths?</i>"]
+    H["<b>Halmos</b><br/>last, and only to prove<br/><i>is it always true?</i>"]
+    C --> F --> M --> H
+    style C fill:#1f6feb,color:#fff,stroke:#1f6feb
+```
 
 ## What Crystal is not
 
@@ -187,6 +242,45 @@ Output formats: `json`, `markdown`, `sarif`, `arcadia`.
 Every signal carries a line-anchored ordered trace and a falsification list, and
 is `RESEARCH` status. None of them can produce a confirmed finding.
 
+#### The coupling grade
+
+Two entry points reaching the same callee, one behind a condition the other
+lacks, is a common shape and *usually deliberate*. What separates a redundant
+gate from a correct difference is not how many conditions there are — it is
+what the condition is **about**.
+
+```mermaid
+flowchart TD
+    A["two entry points of one contract<br/>reach the same callee,<br/>with the same arguments"] --> B
+    B{"the differentiating guard's operands…"}
+
+    B -->|"meet state the callee <b>writes</b><br/><b>and</b> an argument it <b>consumes</b>"| E
+    B -->|"meet one half only"| P
+    B -->|"meet neither"| U
+
+    E["<b>effect-coupled</b> · 0.74–0.85<br/><i>the guard re-decides what the callee<br/>already decides about its own input</i>"]
+    P["<b>partially-coupled</b> · 0.42–0.48<br/><i>state alone is ordinary control flow;<br/>an argument alone is nearly free</i>"]
+    U["<b>uncoupled</b> · 0.30–0.38<br/><i>a precondition of the caller</i>"]
+
+    E --> K["all three are emitted.<br/>The bands do not overlap, and guards<br/>are never summed — only the best<br/>coupled one is evidence."]
+    P --> K
+    U --> K
+
+    style E fill:#1a7f37,color:#fff,stroke:#1a7f37
+    style P fill:#9a6700,color:#fff,stroke:#9a6700
+    style U fill:#57606a,color:#fff,stroke:#57606a
+```
+
+This was calibrated against three evaluated cases on three unrelated public
+protocols, after the previous scoring ranked the *least* coupled case first and
+the only real defect second. The discriminant is relational, so it carries none
+of those protocols' vocabulary — a test asserts the detector's source contains
+none of their words.
+
+Nothing is suppressed to improve a rank: a weak grade is still emitted, and
+says in its own evidence why it is weak. Precision is won by ordering, not by
+silence.
+
 ---
 
 ## What a scan produces
@@ -242,37 +336,54 @@ it without knowing what `donate` means. State is named by contract, because
 
 ## How it works
 
+```mermaid
+flowchart TD
+    SRC["target sources"] --> DISC["discovery<br/><i>.sol · .rs · .go · .move · .vy</i>"]
+    DISC -->|"scaffolding leaves here,<br/>by path, with a reason"| PARSE
+
+    subgraph PARSE ["parsers"]
+        direction LR
+        TS["tree-sitter AST"]
+        RX["regex fallback<br/><i>declares what it costs</i>"]
+        SOLC["solc AST"]
+    end
+
+    PARSE --> IR["language-neutral statement IR"]
+    IR --> SYM["symbolic engine<br/><i>state deltas as canonical polynomials</i><br/>path constraints · branch forking · loop unrolling"]
+    IR --> GRAPH["graphs<br/><i>CFG · call graph · storage · dataflow</i>"]
+    GRAPH --> STATE["causal state graph<br/><i>shared storage AND cross-contract calls,<br/>resolved through declared types</i>"]
+    SYM --> STATE
+
+    STATE --> DET["detectors<br/><i>each sees only the languages<br/>its premise holds for</i>"]
+    STATE --> RESEARCH["research engine<br/><i>differential · composition · novelty</i>"]
+    STATE --> CAMP["campaign system<br/><i>scoped packs · order sensitivity</i>"]
+
+    DET --> GATE
+    RESEARCH --> GATE
+    CAMP --> GATE
+
+    GATE{"finding gate<br/>8-gate proof checklist"}
+    GATE -->|"2 gates need protocol<br/>interpretation and are<br/><b>never set by machine</b>"| OUT
+    OUT["evidence records<br/><i>RESEARCH / VALIDATION — never CONFIRMED</i><br/>JSON · SARIF · Markdown · Arcadia"]
+
+    CAMP -.->|"invariants compile to<br/>executable properties"| VAL["crystal validate"]
+    VAL --> PRE{"pre-flight"}
+    PRE -->|"homonyms · unfunded actors ·<br/>unmodellable precompiles"| REFUSE["REFUSE<br/><i>a green run here would mean nothing</i>"]
+    PRE -->|clear| BACK["Foundry · Medusa · Halmos · Echidna"]
+    BACK --> WIT{"execution witness?"}
+    WIT -->|yes| HELD["HELD"]
+    WIT -->|no| VAC["VACUOUS<br/><i>HELD cannot be constructed</i>"]
+
+    style OUT fill:#1f6feb,color:#fff,stroke:#1f6feb
+    style REFUSE fill:#8b2c2c,color:#fff,stroke:#8b2c2c
+    style VAC fill:#8b2c2c,color:#fff,stroke:#8b2c2c
+    style HELD fill:#1a7f37,color:#fff,stroke:#1a7f37
 ```
-target sources
-      │
-      ▼
-discovery ──────────► language detection (.sol / .rs / .move / .vy)
-      │
-      ▼
-parsers ────────────► tree-sitter AST  ──┐
-                      regex fallback  ───┤──► language-neutral statement IR
-                      solc AST         ──┘
-      │
-      ▼
-symbolic engine ────► state deltas as canonical polynomials
-      │               path constraints, branch forking, loop unrolling
-      ▼
-graphs ─────────────► CFG (basic blocks) · call graph · storage layout · dataflow
-      │
-      ▼
-composition ────────► runtime pipelines · stage roles · Config bindings
-      │
-      ▼
-detectors ──────────► eight structural detectors (see Detectors)
-research engine ────► differential · composition · structural novelty
-campaign system ────► scoped campaigns · protocol packs · order sensitivity
-      │
-      ▼
-finding gate ───────► 8-gate proof checklist  ►  RESEARCH / VALIDATION
-      │                                          (never CONFIRMED)
-      ▼
-evidence records ───► JSON · SARIF · Markdown · Arcadia
-```
+
+Two edges in that diagram carry the whole discipline. The finding gate has two
+checks a machine never sets, so `CONFIRMED` is unreachable by construction. And
+`HELD` is not a label the backend layer may apply — `PropertyVerdict` raises
+without a witness, so a `VACUOUS` cannot be promoted after the fact.
 
 ### The symbolic engine
 

@@ -1,0 +1,88 @@
+name: CI
+
+# Both parser paths, every time. The regex fallback was broken for four builds
+# because only the tree-sitter suite was ever run, and a fallback nobody
+# exercises is a promise nobody keeps.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Real-EVM execution needs Foundry, which CI does not install. Crystal
+  # degrades instead of failing; this makes the degradation deliberate.
+  CRYSTAL_NO_FOUNDRY: "1"
+
+jobs:
+  suite:
+    name: ${{ matrix.parser }} · py${{ matrix.python }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.13"]
+        parser: [tree-sitter, regex]
+        include:
+          # One Windows run: Crystal is developed there, and two of its shipped
+          # defects were Windows-only path behaviour.
+          - os: windows-latest
+            python: "3.13"
+            parser: tree-sitter
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Report the environment Crystal thinks it has
+        run: python -m crystal.cli doctor
+        continue-on-error: true
+
+      - name: Suite — tree-sitter
+        if: matrix.parser == 'tree-sitter'
+        run: python -m pytest -q
+
+      - name: Suite — regex fallback
+        if: matrix.parser == 'regex'
+        env:
+          CRYSTAL_NO_TREESITTER: "1"
+        run: python -m pytest -q
+
+  core-without-treesitter:
+    # The README claims the core has zero dependencies. This is the only job
+    # that can falsify that, because it never installs the optional extra.
+    name: zero-dependency core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install core only, then pytest alone
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install "pytest>=8.0"
+      - name: The engine imports and runs with no grammar present
+        run: |
+          python -c "import crystal, crystal.engine; print(crystal.__release__)"
+          python -m crystal.cli scan ./examples --no-solc --no-foundry --quiet
+      - name: Suite
+        run: python -m pytest -q
