@@ -656,6 +656,9 @@ ignores them.
 
 ### What a pull request has to clear
 
+`main` is protected: all four gates below are required, and they must have
+run against an up-to-date `main`.
+
 | gate | what it can catch |
 | --- | --- |
 | `invariants` | a change that makes `CONFIRMED` reachable, `HELD` constructable without an execution witness, or SARIF escalate above `note` |

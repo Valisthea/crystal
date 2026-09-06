@@ -58,6 +58,23 @@ Two documentation checks are part of the suite: the README test-count badge
 must match what pytest collects, and every changelog entry ships with its
 README update in the same commit. They exist because both drifted.
 
+## What happens to your pull request
+
+`main` is protected. Seven checks must pass before merge, they must have run
+against an up-to-date `main`, and one review is required — Crystal has already
+shipped a verification that passed only because it ran against a stale base.
+
+| check | what it can catch |
+| --- | --- |
+| `invariants` | `CONFIRMED` made reachable, `HELD` constructable without an execution witness, or SARIF escalating above `note` |
+| `tree-sitter` / `regex` × py3.10, py3.13, + one Windows run | a change that only works on the path you happened to run |
+| `zero-dependency core` | an import that quietly adds a dependency the README says does not exist |
+
+The pull request template asks for a before/after table on a real target, and
+for the limitation you already know about. Neither is ceremony: the first is
+how the three builds above caught themselves, and the second is the difference
+between a reader losing a minute and losing a day.
+
 ## Reporting a target Crystal gets wrong
 
 Open an issue with:
