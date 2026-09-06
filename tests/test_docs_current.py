@@ -10,8 +10,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from crystal.parsers import go_ts, rust_ts, solidity_ts
+
 from crystal import __build__, __release__, __version__
 from crystal.detectors import DETECTORS
+from crystal.parsers import go_ts, rust_ts, solidity_ts
 
 ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
@@ -48,6 +53,16 @@ def test_every_detector_is_documented_in_the_readme():
     assert not undocumented, f"detectors missing from the README: {undocumented}"
 
 
+@pytest.mark.skipif(
+    not (solidity_ts.available() and rust_ts.available() and go_ts.available()),
+    reason=(
+        "the badge is a claim about the full install the README documents "
+        "(`pip install -e \".[dev]\"`). Some tests are parametrised over the "
+        "backends actually present, so the collected count is lower without "
+        "the grammars — legitimately, and asserting the full number there "
+        "would fail for the wrong reason."
+    ),
+)
 def test_readme_test_count_matches_the_suite():
     """The badge is a claim about this repository; keep it true.
 

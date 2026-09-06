@@ -11,6 +11,17 @@ from crystal.detectors.pipeline_guard_bypass import DETECTOR as PIPELINE_DETECTO
 from crystal.parsers import rust_ts
 from crystal.semantics.modules import build_module_graph
 from crystal.symbolic import SymbolicEngine
+import pytest
+
+# Rust is the one front-end with no regex fallback: without the tree-sitter
+# grammar `parser_report()` says `backend: unavailable`, and these fixtures
+# parse to nothing. Skipping is the honest outcome — a Substrate assertion
+# against zero contracts would pass while testing nothing.
+pytestmark = pytest.mark.skipif(
+    not rust_ts.available(),
+    reason="needs the tree-sitter Rust grammar; Rust has no regex fallback",
+)
+
 
 RUNTIME = """
 pub type TxExtension = (

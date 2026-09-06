@@ -39,6 +39,10 @@
 > * Without tree-sitter the regex front-ends lose real fidelity (`import`
 >   resolution, `using X for Y`, user-defined value types, modifier bodies).
 >   `crystal doctor` reports `reduced_fidelity` and the exact list.
+> * **Rust is the exception with no fallback at all.** Solidity, Go, Move and
+>   Vyper degrade to a regex front-end; Rust does not, so without
+>   `tree-sitter-rust` a Substrate or Anchor target parses to nothing.
+>   `parser_report()` says `backend: unavailable` rather than pretending.
 > * The Halmos backend is verified to compile but its verdicts are not; Echidna
 >   parsing is unit-tested only, because Echidna is not installed here. Any
 >   format Crystal cannot read decodes to `VACUOUS`, never `HELD`.
