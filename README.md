@@ -14,7 +14,41 @@
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
   <img alt="tests" src="https://img.shields.io/badge/tests-471%20passing-brightgreen">
+  <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
+  <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
+
+---
+
+> ### Beta
+>
+> Crystal is in **beta** and moving fast — fifteen builds, several of which
+> corrected the build before them. Treat its output as a starting point for
+> your own reading, never as a verdict.
+>
+> **What that means in practice.** Crystal produces evidence, and by design it
+> cannot produce a confirmed finding: two of the eight proof gates require
+> protocol interpretation and are never set by machine. A signal is a place to
+> look, with a trace and a list of ways to prove it wrong. It is not an audit
+> and does not replace one.
+>
+> **Known limits, all of them measured** — the point is that they are named,
+> not that they are absent:
+>
+> * Without tree-sitter the regex front-ends lose real fidelity (`import`
+>   resolution, `using X for Y`, user-defined value types, modifier bodies).
+>   `crystal doctor` reports `reduced_fidelity` and the exact list.
+> * The Halmos backend is verified to compile but its verdicts are not; Echidna
+>   parsing is unit-tested only, because Echidna is not installed here. Any
+>   format Crystal cannot read decodes to `VACUOUS`, never `HELD`.
+> * The Go front-end carries the panic class (index, nil, type assertion) in
+>   its IR, and no detector consumes it yet.
+> * A call inside an index expression on the left-hand side (`m[f(x)] += y`) is
+>   recorded by neither Solidity front-end. Pinned as a failing test rather
+>   than worked around.
+>
+> If a result surprises you, that is worth an issue — a wrong signal and a
+> missing one are both bugs here. See [Contributing](CONTRIBUTING.md).
 
 ---
 
@@ -495,6 +529,18 @@ Environment variables: `CRYSTAL_NO_TREESITTER`, `CRYSTAL_NO_FOUNDRY`.
 - [docs/ARCADIA_HANDOFF.md](docs/ARCADIA_HANDOFF.md) — Arcadia integration and campaign system
 - [LAB_HANDOFF.md](LAB_HANDOFF.md) — laboratory handoff notes
 
+## Contributing
+
+Crystal is open to contributions. The engine is in beta and the most useful
+thing you can send is a target it gets wrong — a signal that is false, or a
+defect it stayed silent on. Both are bugs.
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first: it sets out the three rules that
+are enforced by tests rather than by review, and they will reject a change that
+ignores them.
+
+To report a vulnerability **in Crystal itself**, see [SECURITY.md](SECURITY.md).
+
 ## Licence
 
-MIT — Kairos Lab.
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Kairos Lab.
