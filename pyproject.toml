@@ -79,3 +79,6 @@ pythonpath = ["."]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+markers = [
+    "invariant: guards a promise Crystal makes about itself, not a behaviour it offers. Run as their own CI job so a reviewer sees them pass by name.",
+]

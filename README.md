@@ -654,6 +654,20 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) first: it sets out the three rules that
 are enforced by tests rather than by review, and they will reject a change that
 ignores them.
 
+### What a pull request has to clear
+
+| gate | what it can catch |
+| --- | --- |
+| `invariants` | a change that makes `CONFIRMED` reachable, `HELD` constructable without an execution witness, or SARIF escalate above `note` |
+| `suite` — 5 runs | Python 3.10 and 3.13, tree-sitter **and** the regex fallback, plus one Windows run |
+| `zero-dependency core` | an import that quietly adds a dependency the README says does not exist |
+| the PR template | a change measured only on a fixture written to pass, and a signal count that went up without a stated reason |
+
+The `invariants` job is the whole suite's three structural promises pulled out
+as their own named gate. They pass inside `suite` as well — the point is that a
+reviewer sees them pass by name instead of trusting that a 470-test run covered
+them.
+
 To report a vulnerability **in Crystal itself**, see [SECURITY.md](SECURITY.md).
 
 ## Licence

@@ -108,6 +108,7 @@ def test_markdown_includes_mermaid_when_result_passed(tmp_path):
     assert "graph LR" in text
 
 
+@pytest.mark.invariant
 def test_sarif_is_well_formed(data):
     result, _ = data
     document = sarif(result)

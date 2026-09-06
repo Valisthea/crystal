@@ -1,3 +1,15 @@
+"""CONFIRMED is unreachable by machine.
+
+Two of the eight proof gates need protocol interpretation and are never
+set automatically, so `confirmed_findings` is 0 by construction rather
+than by luck. This is the promise the whole engine is built around; it
+runs as a named CI gate.
+"""
+
+import pytest
+
+pytestmark = pytest.mark.invariant
+
 from crystal.engine import research
 
 SRC = """

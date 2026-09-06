@@ -23,6 +23,25 @@ env:
   CRYSTAL_NO_FOUNDRY: "1"
 
 jobs:
+  invariants:
+    # The promises Crystal makes about itself, as their own gate. They are part
+    # of the suite too, but a reviewer approving a merge should see these pass
+    # by name rather than trust that a 470-test run covered them: `CONFIRMED`
+    # unreachable by machine, `HELD` unconstructable without an execution
+    # witness, and SARIF that never escalates above `note`.
+    name: invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Crystal cannot confirm, cannot hold without a witness, cannot escalate
+        run: python -m pytest -q -m invariant
+
   suite:
     name: ${{ matrix.parser }} · py${{ matrix.python }} · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

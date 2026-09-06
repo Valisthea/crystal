@@ -1,0 +1,14 @@
+# Review is required on everything by default.
+*                               @Valisthea
+
+# The promises Crystal makes about itself. A change here is a change to what
+# the tool is allowed to claim, not to how well it works.
+/tests/test_zero_confirmed.py   @Valisthea
+/tests/test_v300_witness.py     @Valisthea
+/crystal/backends/verdict.py    @Valisthea
+/crystal/research/finding_gate.py @Valisthea
+
+# Packaging and CI: both have already shipped a defect that only appeared on a
+# machine other than the author's.
+/pyproject.toml                 @Valisthea
+/.github/                       @Valisthea

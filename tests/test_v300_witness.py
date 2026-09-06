@@ -110,17 +110,20 @@ def witness(actions=(), checked=True, subject=("totalAssets", "totalSupply"), ca
 
 # -- HELD is structurally unreachable without a witness -----------------------------
 
+@pytest.mark.invariant
 def test_held_cannot_be_constructed_without_a_witness():
     with pytest.raises(WitnessRequired):
         PropertyVerdict("property_x", HELD, "trust me")
 
 
+@pytest.mark.invariant
 def test_held_cannot_be_constructed_with_a_witness_that_shows_no_mutation():
     never = ActionOutcome("Vault.deposit", 1000, 0, 1000, (("InsufficientFunds", 1000),), True)
     with pytest.raises(WitnessRequired, match="no state-mutating transition succeeded"):
         PropertyVerdict("property_x", HELD, "green", witness([never]))
 
 
+@pytest.mark.invariant
 def test_held_cannot_be_smuggled_in_through_replace():
     never = ActionOutcome("Vault.deposit", 1000, 0, 1000, (("InsufficientFunds", 1000),), True)
     vacuous = decide("property_x", witness([never]))
@@ -129,18 +132,21 @@ def test_held_cannot_be_smuggled_in_through_replace():
         dataclasses.replace(vacuous, verdict=HELD)
 
 
+@pytest.mark.invariant
 def test_held_requires_the_tool_to_have_evaluated_the_property():
     good = ActionOutcome("Vault.deposit", 10, 3, 7, (), True)
     with pytest.raises(WitnessRequired, match="never reported evaluating"):
         PropertyVerdict("property_x", HELD, "green", witness([good], checked=False))
 
 
+@pytest.mark.invariant
 def test_held_requires_a_subject():
     good = ActionOutcome("Vault.deposit", 10, 3, 7, (), True)
     with pytest.raises(WitnessRequired, match="not tied to any state variable"):
         PropertyVerdict("property_x", HELD, "green", witness([good], subject=()))
 
 
+@pytest.mark.invariant
 def test_held_is_reachable_only_through_a_substantiating_witness():
     good = ActionOutcome("Vault.deposit", 10, 3, 7, (("InsufficientFunds", 7),), True)
     verdict = decide("property_x", witness([good], calls=10))
