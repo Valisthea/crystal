@@ -13,7 +13,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests" src="https://img.shields.io/badge/tests-470%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-471%20passing-brightgreen">
 </p>
 
 ---

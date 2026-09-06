@@ -184,9 +184,15 @@ def _walk_sources(root: Path, suffixes: tuple[str, ...]):
         # A collision between two deployment scripts, or inside node_modules,
         # cannot affect a property run against production code — and reporting
         # it teaches an operator to skip the gate.
+        # Only VENDORED is pruned here. `excluded_dir_reason` is the *research*
+        # fixture filter: it drops `legacy/`, `test-contracts/` and `mocks/`,
+        # which are exactly the directories a divergent homonym hides in and
+        # exactly the ones the compiler still compiles. Pruning them here made
+        # the source pass blind, so the check only ever worked through the
+        # artifact tree — that is, only when the project root happened to
+        # contain `out/`. Scoped to a source subdirectory it found nothing.
         subdirectories[:] = [
-            name for name in subdirectories
-            if name not in VENDORED and excluded_dir_reason(name) is None
+            name for name in subdirectories if name not in VENDORED
         ]
         for name in files:
             if name.endswith(suffixes):

@@ -162,6 +162,19 @@ def test_homonyms_are_found_in_the_tree_as_it_stands(tmp_path):
     assert quotes.artifact == "out/Quotes.sol/Quotes.json"
 
 
+def test_homonyms_are_found_from_sources_alone_when_scoped_to_a_subdirectory(tmp_path):
+    """Scoping the scan to `src/` puts the artifact tree out of reach, so the
+    source pass is the only one that can answer. It used to prune `legacy/`
+    with the *research* fixture filter and find nothing — silently missing the
+    one collision the check exists for, on the tree the compiler still builds."""
+    write_trap(tmp_path)
+    homonyms = {item.name: item for item in find_homonyms(tmp_path / "src")}
+    assert "Quotes" in homonyms, "the source pass must see legacy/ and libraries/"
+    quotes = homonyms["Quotes"]
+    assert quotes.paths == ("legacy/Quotes.sol", "libraries/Quotes.sol")
+    assert not quotes.identical
+
+
 def test_homonym_refuses_the_contract_that_links_it_before_any_launch(tmp_path, monkeypatch):
     write_trap(tmp_path)
     parsed = solidity_regex.parse_text(PEGIN, str(tmp_path / "src" / "PegInContract.sol"))
