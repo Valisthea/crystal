@@ -1,3 +1,15 @@
+"""Protocol invariants, one per observed relation.
+
+Each invariant here inherits the confidence of the relation underneath it
+rather than a constant written at this layer. The constants were how a
+substring match arrived at 0.55 and a signature match at 0.72: numbers chosen
+to look calibrated, applied to evidence that did not vary.
+
+An invariant's expression names the variables and the path, because the reader
+who has to decide whether it is worth a fuzzing campaign needs to know what
+would break it.
+"""
+
 from dataclasses import dataclass
 
 @dataclass(frozen=True)
@@ -23,23 +35,29 @@ def derive_protocol_invariants(model):
             out.append(ProtocolInvariant(
                 "supply",
                 f"{x.operation} should have a corresponding supply/accounting effect",
-                .62,
+                min(x.confidence, .70),
                 [x.evidence]
             ))
 
     for x in model.oracle_signals:
+        # A guard was observed on this path, so the invariant it would state is
+        # already asserted in the source. Repeating it back is not evidence.
+        if x.freshness_checked:
+            continue
         out.append(ProtocolInvariant(
             "oracle",
-            f"{x.contract}.{x.function} should consume a bounded/fresh price signal",
-            .55,
+            f"{x.contract}.{x.function} consumes a {x.kind} at line {x.line} "
+            f"with no freshness or deviation bound on the path",
+            x.confidence,
             x.evidence
         ))
 
     for x in model.fee_signals:
         out.append(ProtocolInvariant(
-            "fees",
-            f"{x.contract}.{x.function} should not create unaccounted fee value",
-            .58,
+            "value-scaling",
+            f"{x.contract}.{x.function}: `{x.scalar}` scales `{x.amount}` on a "
+            f"value-moving path; the scaled remainder must stay accounted for",
+            x.confidence,
             x.evidence
         ))
 

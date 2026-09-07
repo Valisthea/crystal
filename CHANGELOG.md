@@ -1,5 +1,129 @@
 # Changelog
 
+## Crystal V1.00 Build 016 — the invariants that were reading names
+
+Measured on the Lido stonks protocol (`lidofinance/stonks`, 58 sources,
+47 contracts), 2026-09-07. Prompted by a comparison with that protocol's own
+Wake fuzzing harness: 416 lines of Python that reimplement the intended
+semantics and compare them against a mainnet fork. Crystal cannot write that
+oracle and is designed not to — but the comparison exposed something it *had*
+written, which is worse.
+
+**52 protocol invariants, 27 of them citing `heuristic:function-name` as their
+only evidence. All 21 "fee" invariants had matched the substring `fee` inside
+the word `Feed`** — `getFeed`, `setTokenFeed`, `isFeedInSync`,
+`_resolveFeedAndScale`. Not one was about a fee. The oracle set included five
+interface declarations with no body to check, four setters that write a
+threshold and read no feed, and a `constant`.
+
+The whole `crystal/protocol/` package answered its questions from spelling. The
+constraint from Build 012 — *the discriminant is relational* — had been applied
+to the detectors and never to this layer.
+
+### What changed
+
+New `crystal/protocol/grounding.py`: the predicates each generator now uses,
+read out of the statement IR, each carrying the line it was observed on.
+
+| generator | before | after |
+| --- | --- | --- |
+| `oracles` | `"price" in name.lower()` | an external call to a declared price method whose result reaches state or a return, plus whether a freshness guard was seen |
+| `fees` → value-scaling | `"fee" in name.lower()` | a configurable numeric state variable multiplying or dividing a value that flows through the function, result reaching state, a transfer or the return |
+| `accounting` | state-name families (`totalAssets`/`totalSupply`) | two non-mapping quantity variables written in the same direction by the same function |
+| `tokens` | `f.name in ERC20_PATTERNS` | the published ABI signature; `mint`/`burn` kept as *conventions*, scored below standards and required to have a body that writes |
+| `flows` | functions *named* `transfer`/`mint`/`deposit` | declared entry points, plus every outbound value transfer observed in a body |
+| `derive_properties` monotonicity | `"nonce" in name` | every observed write to the variable increments it |
+
+Names still appear and the distinction is the point: `latestRoundData` is a
+promise published in an ABI, `getPriceThing` is a spelling. `constant` versus
+`immutable` is read the same way — `MAX_BASIS_POINTS` is 10000 in every
+deployment that will exist, so it is a denominator, not a protocol parameter.
+That is the same line Lido's harness draws when it varies the margin, the
+tolerance and the improvement cap and never varies the basis-point divisor.
+
+### Measured, on stonks
+
+|  | 015 | 016 | 016 · regex |
+| --- | ---: | ---: | ---: |
+| protocol invariants | 52 | 16 | 11 |
+| resting on a name | 27 | **0** | **0** |
+| citing a line or a signature | 0 | **16** | **11** |
+| oracle signals | 27 | 5 | 3 |
+| fee / value-scaling signals | 21 | 12 | 8 |
+| detector signals | 58 | 58 | 52 |
+| confirmed findings | 0 | 0 | 0 |
+
+**Fewer is not the claim.** What survived has to be right. Two results say more
+than the count:
+
+`Stonks.estimateTradeOutput` now yields
+`` `MARGIN_DIFFERENCE_IN_BASIS_POINTS` scales `expectedBuyAmount` `` with the
+expression `(expectedBuyAmount * MARGIN_DIFFERENCE_IN_BASIS_POINTS) / MAX_BASIS_POINTS`
+— the exact formula the Wake harness reimplements by hand as
+`_estimate_trade_output`. Build 015 did not have it: the margin is applied to a
+local holding an earlier call's result, and an earlier draft of this build that
+demanded a parameter missed it too.
+
+`OracleRouter._readNormalizedPrice` produces a signal and **no invariant**. It
+reads Chainlink through the feed registry and guards it with `answeredInRound`,
+`updatedAt` and `maxStalenessSeconds`. The source already asserts what the
+invariant would say, so it is not raised. Nothing is silenced — the signal is
+still there, scored below an unguarded read.
+
+### Three things this build got wrong first
+
+Recorded because each was caught by a measurement rather than by review, and
+the second was caught by the suite the project keeps for exactly this reason.
+
+1. **A rule that hid the finding.** The first co-movement rule required every
+   function writing one variable to write the other. That drops the pair as soon
+   as some path moves one alone — the donation that inflates a share price, the
+   case the relation exists to expose. Two tests failed; the rule was wrong, not
+   the tests. The discriminant is instead that a counter stepped by a literal is
+   not a quantity.
+2. **A predicate that worked on one parser.** That quantity test keyed off
+   `value.kind == "number_literal"`, which is the tree-sitter spelling. The
+   regex front-end says `expression` for `nonce += 1`, so every counter passed
+   on the fallback path. It now keys off identifiers and the source slice, which
+   both front-ends agree on, and is pinned by a test that parses with
+   `solidity_regex` directly.
+3. **Scaling that was addition.** Accepting any binary expression reported
+   `_cumulativeRevenueUSD + amountUSD_`, an accumulator where nothing is scaled.
+
+### Fixed on the way
+
+* **The regex parser dropped every `constant` and `immutable` state variable.**
+  `VAR_RE` allowed one modifier between the type and the name, so
+  `uint16 private constant MAX_BASIS_POINTS = 1e4;` did not match at all. A
+  pre-existing defect that only surfaced because this build started reading the
+  `constant` flag. Modifiers are now matched in any number and order, and
+  `constant`, `immutable` and the initialiser are recorded.
+
+### Tests
+
+`tests/test_v300_grounding.py` — 21 tests, each pinning a reason rather than a
+count: a getter over local storage is not an oracle read, an interface
+declaration yields nothing, an observed guard suppresses the invariant but not
+the signal, a mapping is not paired with a scalar total, an asymmetric path does
+not dissolve the relation, a `constant` denominator is not the scalar, and the
+quantity test survives the regex front-end.
+
+492 collected. 490 passed, 2 xfailed under tree-sitter; 467 passed, 24 skipped,
+1 xfailed under `CRYSTAL_NO_TREESITTER=1`.
+
+### What this does not do
+
+The regex path derives 11 invariants where tree-sitter derives 16. The gap is
+IR fidelity, not this layer: the regex front-end does not attach a call to a
+`return` statement, so some scalings are only visible as expressions. Build 016
+reads both shapes and still finds fewer on the fallback. The number is reported
+rather than smoothed over.
+
+Nothing here makes Crystal a substitute for a hand-written model like the Wake
+harness. That harness knows what the protocol *intends*; Crystal is not allowed
+to. What it can now do is name the relations the model would have to encode,
+and say where each one lives.
+
 ## Crystal V1.00 Build 015 — three axes the execution engines leave open
 
 Measured against Foundry 1.6.0, Medusa 1.5.1 and Halmos 0.3.3 on one bridge,

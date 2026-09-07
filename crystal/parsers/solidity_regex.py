@@ -92,9 +92,16 @@ MODIFIER_RE = re.compile(
 )
 CONSTRUCTOR_RE = re.compile(r"\bconstructor\s*\(([^)]*)\)([^{;]*)\{", re.MULTILINE)
 FALLBACK_RE = re.compile(r"\b(receive|fallback)\s*\(\s*\)([^{;]*)\{", re.MULTILINE)
+# A state variable takes any number of modifiers between its type and its name,
+# in any order: `uint16 private constant MAX_BASIS_POINTS = 1e4;`. Accepting
+# only one dropped every `constant` and `immutable` declaration on this path —
+# so a target's configured parameters were invisible to the fallback parser
+# while tree-sitter saw them all.
+VAR_MODIFIERS = "public|private|internal|constant|immutable|transient|override"
 VAR_RE = re.compile(
     r"^\s*(?P<type>(?:mapping\s*\([^;]+\)|[A-Za-z_]\w*(?:\[\])?))"
-    r"\s+(?:(?P<vis>public|private|internal)\s+)?(?P<name>[A-Za-z_]\w*)\s*(?:=.*)?;",
+    r"(?P<mods>(?:\s+(?:" + VAR_MODIFIERS + r"))*)"
+    r"\s+(?P<name>[A-Za-z_]\w*)\s*(?:=\s*(?P<init>[^;]*))?;",
     re.MULTILINE
 )
 VIS_RE = re.compile(r"\b(public|external|internal|private)\b")
@@ -645,10 +652,19 @@ def parse_text(text: str, path: str, catalog: TypeCatalog | None = None) -> list
         for vm in VAR_RE.finditer(body):
             depth = body[:vm.start()].count("{") - body[:vm.start()].count("}")
             if depth == 0:
+                modifiers = (vm.group("mods") or "").split()
+                visibility = next(
+                    (m for m in modifiers
+                     if m in {"public", "private", "internal"}),
+                    "default",
+                )
                 contract.state_vars.append(StateVar(
                     contract.name, vm.group("name"), vm.group("type"),
-                    vm.group("vis") or "default",
+                    visibility,
                     line + 1 + body.count("\n", 0, vm.start()),
+                    constant="constant" in modifiers,
+                    immutable="immutable" in modifiers,
+                    initial_value=(vm.group("init") or "").strip(),
                 ))
 
         state_names = {v.name for v in contract.state_vars}

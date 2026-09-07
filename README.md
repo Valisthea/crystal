@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 015</h1>
+<h1 align="center">Crystal V1.00 Build 016</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -14,7 +14,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-471%20passing-brightgreen">
+  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-492%20passing-brightgreen">
   <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -23,7 +23,7 @@
 
 > ### Beta
 >
-> Crystal is in **beta** and moving fast — fifteen builds, several of which
+> Crystal is in **beta** and moving fast — sixteen builds, several of which
 > corrected the build before them. Treat its output as a starting point for
 > your own reading, never as a verdict.
 >
@@ -412,6 +412,41 @@ inflation attack manipulates.
 Anything the engine cannot model exactly — inline assembly, unbounded loops,
 unresolved storage mutations — is recorded in `unsupported`, never
 approximated.
+
+### Protocol claims rest on relations, not on names
+
+Crystal derives protocol invariants — the ledger, oracle and value-scaling
+statements a fuzzing campaign can be pointed at. Until Build 016 it derived
+them from spelling: a function whose name contained `price` was an oracle read,
+one containing `fee` was a fee. On a real multi-contract protocol that produced
+52 invariants of which 27 cited `heuristic:function-name` as their only
+evidence, and **all 21 "fee" invariants had matched the substring `fee` inside
+the word `Feed`** — `getFeed`, `setTokenFeed`, `isFeedInSync`. Not one was
+about a fee.
+
+Each generator now reads the statement IR instead:
+
+| claim | what has to be observed |
+| --- | --- |
+| oracle | an external call to a *declared* price method whose result reaches state or a return — and no freshness guard on the path |
+| ledger | two non-mapping state variables carrying quantities, written in the same direction by the same function, never in opposite directions |
+| value-scaling | a configurable, numeric state variable multiplying or dividing a value that flows through the function, whose result reaches somebody |
+| token entry point | the published ABI signature, `transfer(address,uint256)` — not the name alone |
+| monotonicity | every observed write to the variable increments it |
+
+Names still appear, and the distinction is deliberate: `latestRoundData` is a
+promise Chainlink publishes in an ABI, `getPriceThing` is a developer's
+spelling. Matching the first is reading a standard. `constant` versus
+`immutable` is read the same way — `MAX_BASIS_POINTS` is 10000 in every
+deployment that will ever exist, so it is a denominator, while an `immutable`
+set from a constructor argument is the value an operator can pick wrong.
+
+Two consequences worth stating. An invariant the source already asserts is not
+raised — a Chainlink read guarded by `updatedAt` and `answeredInRound` produces
+a signal and no invariant, because repeating a check back to its author is not
+evidence. And a function that moves one total without the other keeps its
+relation rather than dissolving it: that asymmetry is the donation path a
+share-inflation attack needs, and hiding it would hide the finding.
 
 ### State is namespaced by contract
 

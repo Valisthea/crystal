@@ -3,7 +3,12 @@ from crystal.engine import research
 SOURCE = """
 pragma solidity ^0.8.20;
 
+interface IFeed {
+    function latestRoundData() external view returns (uint80,int256,uint256,uint256,uint80);
+}
+
 contract Vault {
+    address feed;
     mapping(address => uint256) public balances;
     uint256 public totalAssets;
     uint256 public totalSupply;
@@ -27,8 +32,15 @@ contract Vault {
         totalSupply -= amount;
     }
 
+    // Reads its own storage. Named like an oracle, and not one — this is the
+    // case that used to produce a signal, on the strength of the word.
     function getPrice() external view returns (uint256) {
         return price;
+    }
+
+    function quote() external view returns (uint256) {
+        (, int256 answer,,,) = IFeed(feed).latestRoundData();
+        return uint256(answer);
     }
 }
 """
@@ -41,6 +53,8 @@ def test_protocol_model(tmp_path):
     assert any(x.kind == "transfer" for x in pm.token_functions)
     assert pm.value_flows
     assert pm.accounting_relations
-    assert pm.oracle_signals
+    # The external feed read, and only that one. `getPrice` returns local
+    # storage: a name, not a price source.
+    assert [(x.contract, x.function) for x in pm.oracle_signals] == [("Vault", "quote")]
     assert pm.transitions
     assert r["protocol_invariants"]

@@ -19,6 +19,7 @@ import shutil
 from dataclasses import dataclass, field
 
 from .. import process
+from ..protocol.grounding import monotonic_variables
 
 UNAVAILABLE = "UNAVAILABLE"
 UNSUPPORTED = "UNSUPPORTED"
@@ -179,21 +180,29 @@ def derive_properties(contract, protocol_invariants=()) -> tuple[list[Property],
                 f"no getter to build a property from"
             )
 
-    for variable in contract.state_vars:
-        lowered = variable.name.lower()
-        if any(token in lowered for token in ("nonce", "counter", "index")):
-            if variable.name in readable:
-                ghost = f"_ghost_{_identifier(variable.name)}"
-                properties.append(Property(
-                    f"property_{_identifier(variable.name)}_monotonic",
-                    f"target.{variable.name}() >= {ghost}",
-                    f"{contract.name}.{variable.name}", "monotonicity",
-                    "counters must never decrease", variable.name,
-                ))
-            else:
-                unsupported.append(
-                    f"counter {variable.name} is not publicly readable"
-                )
+    # Monotonicity earned from the writes, not from the name. `nonce`,
+    # `counter` and `index` used to qualify a variable for this property on
+    # spelling alone — which asserts monotonicity of anything so named and
+    # misses every counter called something else. A variable whose every
+    # observed write increments it is monotone because of what the code does.
+    # One assigned with a bare `=` is excluded even where it happens to be
+    # monotone: the operator does not show it, so Crystal does not claim it.
+    for name, writes in sorted(monotonic_variables(contract).items()):
+        if name in readable:
+            ghost = f"_ghost_{_identifier(name)}"
+            properties.append(Property(
+                f"property_{_identifier(name)}_monotonic",
+                f"target.{name}() >= {ghost}",
+                f"{contract.name}.{name}", "monotonicity",
+                "every observed write increments it: "
+                + ", ".join(f"{w.function} L{w.line}" for w in writes[:4]),
+                name,
+            ))
+        else:
+            unsupported.append(
+                f"{name} increments on every observed write but is not "
+                f"publicly readable; no getter to build a property from"
+            )
 
     if any("balance" in name.lower() for name in names) and not properties:
         unsupported.append(
