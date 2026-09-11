@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 017</h1>
+<h1 align="center">Crystal V1.00 Build 018</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -14,7 +14,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-508%20passing-brightgreen">
+  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-523%20passing-brightgreen">
   <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -23,7 +23,7 @@
 
 > ### Beta
 >
-> Crystal is in **beta** and moving fast — seventeen builds, several of which
+> Crystal is in **beta** and moving fast — eighteen builds, several of which
 > corrected the build before them. Treat its output as a starting point for
 > your own reading, never as a verdict.
 >
@@ -615,6 +615,61 @@ The second chain is not Crystal's job.
    `kind: review`. Crystal will not tell your CI that something is broken.
 
 ---
+
+## How the symbolic budget is spent
+
+Executing a sequence symbolically is the expensive step, so Crystal executes a
+bounded number of the hypotheses it generates — 150. On the Lido stonks
+protocol there were 198, and the other 48 were discarded **silently**.
+
+Worse, they were discarded by spelling. **175 of those 198 hypotheses carry the
+same score, 0.720**, so the budget boundary falls deep inside a tie, and what
+decided between running a sequence and dropping it was the fallback tiebreak:
+length, then alphabetical order. `Stonks.constructor → Order.initialize →
+Order.isValidSignature` — the function that protocol's own fuzzing harness
+spends four hundred draws on — was dropped because `S` sorts late.
+
+Build 018 leaves the scores alone. A hypothesis the generator ranked higher is
+still executed first; re-ranking on anything else would be scoring the ranking
+twice. What changed is the *tiebreak*, which is where the decision actually
+lives, and it now asks a structural question — **does anything downstream
+consume this?**
+
+| signal | what it reads |
+| --- | --- |
+| a detector already fired on the path | evidence Crystal has produced, not a name |
+| the chain spans more than one contract | contract identity |
+| some function on it writes state | a chain of pure getters cannot produce a delta |
+
+A fourth signal was built, measured and removed: whether an enabled campaign's
+categories accepted the state written. It was true for 95% of hypotheses, its
+accepted set covered every category the classifier can return, and it reached
+that answer through substring matches on variable names. A signal that does not
+discriminate is not worth a dependency on spelling.
+
+**Measured on two protocols, same budget, nothing raised:**
+
+| | stonks | Flyover bridge |
+| --- | ---: | ---: |
+| hypotheses generated | 198 | 250 |
+| budget | 150 | 150 |
+| deferred, carrying evidence — before | 22 of 48 | 37 of 100 |
+| deferred, carrying evidence — after | **4 of 48** | **2 of 100** |
+| distinct findings lost | none | none |
+
+The count of anomalies on stonks rose from 30 to 34, and that is **not** the
+result. All of them are one finding reached by more paths; in distinct
+`(kind, state)` findings it is 1 before and 1 after. The result is the row above
+it: sequences where Crystal had already produced evidence and then declined to
+look, without saying so.
+
+Every deferred hypothesis is now reported with its score, its demand and the
+reason — in `sequence_budget`, in the scan payload and in the Arcadia hand-off.
+The report also states how wide the tie at the boundary was, because a reader
+deciding whether to trust the cut needs to know when the score stopped ranking.
+
+**Raising the budget is not the fix**, and the report says so where somebody
+would reach for it. Throughput is the axis Crystal does not compete on.
 
 ## What an analysed target's tooling can reach
 

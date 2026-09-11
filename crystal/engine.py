@@ -154,15 +154,20 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
         "excluded_scaffolding": excluded_scaffolding,
         "include_tests": include_tests,
     }
+    # Discovered before research, not after: the symbolic sequence budget is
+    # spent inside `run_research`, and what an enabled campaign is willing to
+    # accept is one of the signals that decides which sequences get a slot.
+    # Loading a pack reads no research output, so the move is safe.
+    # `packs` carries operator-written packs, by dotted module or by file path.
+    registry = discover_packs(packs=packs)
+    result["campaign_registry"] = registry
+    result["campaign_packs"] = dict(registry.load_report)
+
     result = run_research(result)
     result["project"] = str(project)
     result["research_candidates"] = build_candidates(result)
 
     # Campaign system: run enabled campaigns against the completed result.
-    # `packs` carries operator-written packs, by dotted module or by file path.
-    registry = discover_packs(packs=packs)
-    result["campaign_registry"] = registry
-    result["campaign_packs"] = dict(registry.load_report)
     result["campaign_results"] = run_campaigns(
         registry.enabled(), result, top_global=3,
     )

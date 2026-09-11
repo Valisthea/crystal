@@ -83,22 +83,28 @@ Package sizes, for a sense of where the mass sits:
 
 ## C. Gaps, in the order their evidence is strongest
 
-### 1. No adaptive scheduling — and it is measurably wasteful
+### 1. No adaptive scheduling
 
-The brief's §8 forbids executing every strategy equally. Crystal does exactly
-that. On stonks:
+> **Corrected by Build 018.** The mechanism described below was wrong, and
+> finding out how was the build. The campaign runner has **no budget to
+> allocate**: all 15 campaigns re-read the *same* 150 state deltas and prune.
+> The "150 sequences explored" reported per campaign is the size of that shared
+> list, not a slice any campaign consumed. Every number in the table was
+> therefore a count of re-examinations, not of exploration.
+>
+> The budget is one step earlier and it is real: `derive_state_deltas` executes
+> `sequence_hypotheses[:150]` — 150 of 198 on stonks, the rest discarded
+> silently, and 175 of the 198 tied on score so the cut was decided by
+> lexicographic order. Build 018 orders that cut by downstream demand and
+> reports what it did not reach. Sequences carrying evidence that the budget
+> skipped: 22/48 → 4/48 on stonks, 37/100 → 2/100 on the Flyover bridge.
 
-| campaign | sequences explored | candidates |
-| --- | ---: | ---: |
-| `generic-temporal-boundary` | 150 | 2 |
-| `defi-share-inflation` | 150 | 1 |
-| `generic-ownership-transition` | 150 | 1 |
-| *eleven others* | 150 each | **0** |
-
-**2,250 sequences for 4 candidates, allocated in equal fixed slices.** Eleven
-campaigns that returned nothing consumed 73% of the budget, and nothing in the
-runner notices. This is the highest-leverage gap in the repository and the
-easiest to measure a change against.
+The brief's §8 forbids executing every strategy equally, and the campaign layer
+still does: every enabled campaign runs on every target regardless of whether
+its premise has any surface there. On stonks, eleven of fifteen returned no
+candidate, and a campaign with no surface is indistinguishable at the output
+from one that looked and found nothing. That distinction is worth making, and
+it is what remains of this gap.
 
 ### 2. Arcadia can read Crystal but cannot direct it
 
@@ -236,9 +242,9 @@ One build per gap, each with a before/after measurement on a real target, in
 this order — evidence strength first, except that C.6 jumps the queue because
 it is a security gap:
 
-1. **017 — isolation** (C.6). Nothing else is safe to accelerate first.
-2. **018 — scheduler** (C.1). Measured as candidates per sequence explored on
-   stonks and on the Flyover bridge.
+1. ~~**017 — isolation** (C.6)~~ — shipped.
+2. ~~**018 — scheduler** (C.1)~~ — shipped, having first corrected what the
+   budget actually was.
 3. **019 — request contract** (C.2). Measured by Arcadia being able to ask a
    scoped question and get a scoped answer.
 4. **020 — evidence graph and root-cause merge** (C.4, C.5).

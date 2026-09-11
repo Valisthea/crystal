@@ -1,5 +1,130 @@
 # Changelog
 
+## Crystal V1.00 Build 018 — the budget that was spent alphabetically
+
+Second step of the plan in [docs/EVOLUTION_ASSESSMENT.md](docs/EVOLUTION_ASSESSMENT.md).
+That assessment described the waste wrongly, and finding out how is what this
+build is: it said 15 campaigns each burned a 150-sequence slice. They do not.
+Every campaign re-reads the *same* 150 state deltas and prunes. The runner has
+no budget to allocate.
+
+The budget is one step earlier and it is real: `derive_state_deltas` executes
+`sequence_hypotheses[:150]`. On the Lido stonks protocol that is 150 of 198, and
+the other 48 were discarded with no line of output anywhere.
+
+### The measurement that decided the design
+
+On stonks, **175 of the 198 hypotheses carry the same score, 0.720**. The budget
+boundary therefore falls deep inside a tie, and what decided between executing a
+sequence and discarding it was the fallback tiebreak — sequence length, then
+lexicographic order.
+
+```
+[0.720] Stonks.constructor -> Order.initialize -> Order.isValidSignature   (dropped)
+```
+
+That is the function the protocol's own Wake harness spends four hundred draws
+on, never symbolically executed, discarded because `S` sorts late. **22 of the
+48 discarded sequences already carried a detector signal on their path.**
+
+### What changed
+
+New `crystal/scheduling/`. Scores are untouched and remain the primary key: a
+hypothesis the generator ranked higher is still executed first, because
+re-ranking on anything else would be scoring the ranking twice. Only the
+tiebreak changed — which on a real target is where the decision lives.
+
+Three signals, each structural, all free because the pipeline has already
+produced them by the time sequences are ranked:
+
+| signal | reads |
+| --- | --- |
+| `signalled` | a detector already fired on a function in the chain |
+| `cross_contract` | contract identity — more than one contract spanned |
+| `mutating` | some function writes state; a chain of pure getters cannot produce a delta |
+
+A fourth was built, measured and removed: whether an enabled campaign's
+`allowed_categories` accepted the state written. True for 95% of hypotheses, its
+accepted set covered every category `classify_state` can return, so it was
+`mutating` under another name — and it reached that answer through substring
+matches on state-variable names. A signal that does not discriminate is not
+worth a nominal dependency, and the constraint against deciding by spelling is
+the point of this build.
+
+`discover_packs` moved ahead of `run_research`, since the registry has to exist
+before the budget is spent. Loading a pack reads no research output.
+
+### Measured, two protocols, budget unchanged at 150
+
+| | stonks | Flyover bridge |
+| --- | ---: | ---: |
+| hypotheses generated | 198 | 250 |
+| executed | 150 | 150 |
+| deferred | 48 | 100 |
+| **deferred that carried evidence — 017** | 22 (46%) | 37 (37%) |
+| **deferred that carried evidence — 018** | **4 (8%)** | **2 (2%)** |
+| sequences swapped in/out | 18 | 48 |
+| distinct `(kind, state)` findings lost | none | none |
+
+`Stonks.constructor -> Order.initialize -> Order.isValidSignature` is now
+executed.
+
+### What is not the result
+
+The anomaly count on stonks went from 30 to 34. **That is not progress and is
+not claimed as it.** All 34 are the same single finding —
+`unresolved-effect on Stonks::RECEIVER` — reached by more paths. In distinct
+`(kind, state)` findings it is 1 before and 1 after.
+
+Three anomalies present under 017 are absent under 018, and all three are
+`Stonks.constructor -> Stonks.<getter>`: single-contract two-step chains ending
+in a pure getter, demand 0.4. They were displaced by cross-contract chains
+carrying a detector signal, demand 1.0, reporting the same anomaly on the same
+state slot. With a fixed budget something must be dropped; what changed is that
+it is now dropped for a stated reason instead of by alphabetical order, and the
+drop is reported.
+
+### Nothing is discarded in silence any more
+
+`sequence_budget` travels in the scan payload and the Arcadia hand-off: budget,
+considered, executed, deferred, the boundary score, **how wide the tie at the
+boundary was**, and per-hypothesis detail with the reason. A reader deciding
+whether to trust the cut needs the tie width — when it is 175 of 198, the score
+is not ranking and the tiebreak is.
+
+The report also states that raising the budget is not the intended fix, where
+somebody would reach for it. Throughput is the axis Crystal does not compete on,
+and the budget was deliberately left at 150.
+
+### Tests
+
+`tests/test_v300_scheduling.py` — 15 tests. Two are invariants and the named CI
+gate grows from 12 to 14:
+
+* **the allocation does not change when everything is renamed.** Two structurally
+  identical projects, names reversed alphabetically; the executed set must
+  translate exactly. Under the old tiebreak it would not have.
+* what the budget did not reach is reported with a reason.
+
+Also pinned: demand never promotes a sequence past a better-scored one, a tie
+demand cannot separate stays deterministic, and repeated signals on one path are
+not double counted.
+
+523 collected. 521 passed, 2 xfailed under tree-sitter; 498 passed, 24 skipped,
+1 xfailed under `CRYSTAL_NO_TREESITTER=1`.
+
+### What this does not do
+
+It does not make the score discriminate. 175 of 198 hypotheses sharing one value
+is the real weakness; Build 018 stops that weakness being resolved by spelling,
+but a ranking that actually separated them would be better than a good tiebreak.
+That is the `generate_sequences` scoring model, and it is not touched here.
+
+It also does not schedule anything else. Campaigns still all run, detectors
+still all run, and the choice between static reasoning and executable validation
+is still the operator's. Only the one budget that was already being rationed is
+now rationed for a reason.
+
 ## Crystal V1.00 Build 017 — what the target's tooling could read
 
 Section 22 of the architecture brief requires that analysed code run without

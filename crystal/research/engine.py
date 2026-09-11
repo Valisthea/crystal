@@ -25,6 +25,7 @@ from .impact import infer_impact_paths
 from .mutations import generate_mutations
 from .novelty import score_novelty
 from .order_sensitivity import detect_order_sensitivity
+from ..scheduling import schedule_sequences
 from .statedelta import derive_state_deltas
 from .unknown_behavior import discover_unknown_behaviors
 
@@ -118,6 +119,11 @@ def _exclude_scaffolding(result):
     ]
 
 
+# The symbolic budget. Deliberately not raised in Build 018: spending it
+# better is the work, and raising it would be competing on throughput.
+SEQUENCE_BUDGET = 150
+
+
 def run_research(result):
     # `crystal.engine.research` now excludes scaffolding before anything is
     # built. This stays as a safety net for callers that assemble a result
@@ -128,8 +134,21 @@ def run_research(result):
     result["symbolic_engine"] = engine
 
     result["behavior_relations"] = derive_behavior_relations(contracts)
+
+    # Symbolic sequence execution is the pipeline's scarce resource. Which
+    # hypotheses get a slot used to come down to a lexicographic tiebreak once
+    # the scores tied, which on a real target was almost always: 175 of 198
+    # hypotheses shared one score. Scores still rank; demand now breaks the tie,
+    # and whatever the budget did not reach is reported instead of vanishing.
+    allocation = schedule_sequences(
+        result["sequence_hypotheses"],
+        budget=SEQUENCE_BUDGET,
+        detectors=result.get("detectors", ()),
+        contracts=contracts,
+    )
+    result["sequence_budget"] = allocation.report()
     result["state_deltas"] = derive_state_deltas(
-        contracts, result["sequence_hypotheses"], engine
+        contracts, allocation.executed, engine, limit=len(allocation.executed),
     )
     result["differential_candidates"] = generate_differential_candidates(
         contracts, result["state_deltas"], engine

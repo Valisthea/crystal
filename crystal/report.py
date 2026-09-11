@@ -461,6 +461,10 @@ def payload(result):
             "severity_decision": False,
             "submission_decision": False,
         },
+        # Which sequence hypotheses got one of the symbolic budget's slots,
+        # and what the budget did not reach. 48 of 198 used to be discarded
+        # here without a line of output.
+        "sequence_budget": result.get("sequence_budget", {}),
         # What the analysed target's tooling could reach during this run.
         # Part of the payload rather than a log line because Arcadia has to
         # know it when weighing a result, and because a claim nobody can
@@ -925,6 +929,7 @@ def arcadia(data) -> dict:
         },
         "evidence_records": data["evidence_records"],
         "isolation": data.get("isolation", {}),
+        "sequence_budget": data.get("sequence_budget", {}),
         "campaigns": data.get("campaign_results", []),
         "gate": data["finding_gate"],
         "quality": data["quality_report"],
