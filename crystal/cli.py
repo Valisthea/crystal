@@ -18,6 +18,7 @@ from urllib.request import url2pathname
 from . import __build__, __release__, __version__, process
 from .backends import backend_names, capabilities as backend_capabilities, run_backend
 from .campaigns import discover_packs
+from .isolation import OPT_IN_VARIABLE, isolation_report
 from .detectors import detector_names
 from .discovery import discover, profile
 from .engine import research
@@ -431,8 +432,28 @@ def environment_report() -> dict:
         },
         "blocking": blocking,
         "warnings": drift_warnings(crystal),
+        "isolation": isolation_report(),
         "ready": not blocking,
     }
+
+
+def _print_isolation(isolation: dict) -> None:
+    """What a target's tooling can reach. The third line is the one that matters.
+
+    An operator deciding whether to point Crystal at something genuinely
+    hostile needs to know that the filesystem and the environment are confined
+    and the process is not. Printing the first two and omitting the third would
+    read as a stronger guarantee than Crystal offers.
+    """
+    environment = isolation["environment"]
+    print("isolation (what an analysed target's tooling can reach)")
+    print(f"  environment         allowlist — {len(environment['passed'])} passed, "
+          f"{environment['withheld_count']} withheld")
+    if environment["opted_in"]:
+        print(f"  opted back in       {', '.join(environment['opted_in'])} "
+              f"(via {OPT_IN_VARIABLE})")
+    print("  filesystem          disposable working directory per execution")
+    print("  process             NOT sandboxed — tools run as you, on this host")
 
 
 def _print_source(crystal: dict) -> None:
@@ -506,6 +527,8 @@ def _print_doctor(report: dict) -> None:
               f"{info['version'] or info['reason']}")
     print("")
     print(f"detectors: {', '.join(report['detectors'])}")
+    print("")
+    _print_isolation(report["isolation"])
     print("")
     for warning in report.get("warnings", ()):
         print(f"WARNING: {warning}")
@@ -839,7 +862,11 @@ def _update(args) -> int:
     if pull.returncode != 0:
         return pull.returncode or 1
     install = process.run(
-        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=root, timeout=600
+        [sys.executable, "-m", "pip", "install", "-e", "."], cwd=root, timeout=600,
+        # Crystal installing Crystal, from the operator's own checkout. A proxy
+        # or certificate setting has to survive or this fails on a corporate
+        # network, and no target code runs here.
+        inherit_environment=True,
     )
     if install.returncode != 0:
         print(install.stderr.strip()[-2000:])

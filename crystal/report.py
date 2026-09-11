@@ -12,6 +12,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 from . import __build__, __version__
+from .isolation import isolation_report
 
 SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 ARCADIA_SCHEMA_VERSION = "crystal-arcadia/2.0"
@@ -460,6 +461,11 @@ def payload(result):
             "severity_decision": False,
             "submission_decision": False,
         },
+        # What the analysed target's tooling could reach during this run.
+        # Part of the payload rather than a log line because Arcadia has to
+        # know it when weighing a result, and because a claim nobody can
+        # check is not a guarantee.
+        "isolation": isolation_report(),
         "constraints": [asdict(x) for x in result.get("constraints", [])],
         "concrete_validation": [asdict(x) for x in concrete],
         "foundry_capabilities": asdict(result["foundry_capabilities"])
@@ -918,6 +924,7 @@ def arcadia(data) -> dict:
             "constraints": data["constraints"],
         },
         "evidence_records": data["evidence_records"],
+        "isolation": data.get("isolation", {}),
         "campaigns": data.get("campaign_results", []),
         "gate": data["finding_gate"],
         "quality": data["quality_report"],

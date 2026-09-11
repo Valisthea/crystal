@@ -31,6 +31,26 @@ That is deliberate and documented — a pack is code, like a pytest plugin. Do
 not load one you have not read. A pack executing is not a vulnerability; a pack
 executing *without* being passed on the command line would be.
 
+## What Crystal isolates, and what it does not
+
+Since Build 017, every external tool Crystal launches gets an **allowlisted**
+environment rather than the operator's own. This closes a real exposure:
+Foundry hands a Solidity harness `vm.envUint("PRIVATE_KEY")`, and that harness
+is compiled from a contract Crystal did not write, so a deploy key or an RPC
+URL carrying an API token was readable from inside the target's own code.
+Backends already ran in a disposable working directory, and the generated
+`foundry.toml` now states `ffi = false` rather than relying on Foundry's
+default.
+
+**Crystal does not sandbox the process.** Tools run as you, on your host, with
+your rights. `crystal doctor` prints exactly this, and the same report travels
+in every scan payload. If you are analysing something you believe to be
+hostile, run Crystal inside a disposable machine — that is the layer Crystal
+does not provide and does not claim to.
+
+A credential reaching a launched tool *is* in scope, and is what the
+`invariants` CI gate exists to prevent regressing.
+
 ## What is not a vulnerability
 
 * **A wrong signal, or a missed defect.** Those are bugs — open a normal issue,

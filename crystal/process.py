@@ -11,6 +11,8 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 
+from .isolation import child_environment
+
 
 @dataclass(frozen=True)
 class ProcessResult:
@@ -31,11 +33,26 @@ class ProcessResult:
         return ""
 
 
-def run(command, cwd=None, timeout: int = 120, stdin: str | None = None) -> ProcessResult:
+def run(command, cwd=None, timeout: int = 120, stdin: str | None = None,
+        inherit_environment: bool = False, env_extra=None) -> ProcessResult:
+    """Run an external tool with the environment Crystal chose to give it.
+
+    The default withholds everything not on `isolation.ALWAYS | TOOLCHAIN`.
+    That matters most for the property backends: Foundry hands the target's own
+    Solidity harness `vm.envUint("PRIVATE_KEY")`, so inheriting the operator's
+    environment put a deploy key inside code Crystal did not write.
+
+    `inherit_environment=True` is for commands acting on the operator's own
+    assets rather than on a target — installing Crystal into its own checkout,
+    where a proxy or certificate setting has to survive. It is not a
+    convenience for a backend that will not start; that is an allowlist gap,
+    and the fix is to widen the allowlist or set `CRYSTAL_PASS_ENV`.
+    """
+    environment = None if inherit_environment else child_environment(extra=env_extra)
     try:
         completed = subprocess.run(
             command, cwd=cwd, input=stdin, timeout=timeout,
-            capture_output=True, check=False,
+            capture_output=True, check=False, env=environment,
             encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired as exc:

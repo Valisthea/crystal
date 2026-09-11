@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 016</h1>
+<h1 align="center">Crystal V1.00 Build 017</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -14,7 +14,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-492%20passing-brightgreen">
+  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-508%20passing-brightgreen">
   <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -23,7 +23,7 @@
 
 > ### Beta
 >
-> Crystal is in **beta** and moving fast — sixteen builds, several of which
+> Crystal is in **beta** and moving fast — seventeen builds, several of which
 > corrected the build before them. Treat its output as a starting point for
 > your own reading, never as a verdict.
 >
@@ -615,6 +615,43 @@ The second chain is not Crystal's job.
    `kind: review`. Crystal will not tell your CI that something is broken.
 
 ---
+
+## What an analysed target's tooling can reach
+
+Crystal launches Foundry, Medusa, Halmos and Echidna on contracts it did not
+write, and those tools hand the contract's own harness a way back out:
+`vm.envUint("PRIVATE_KEY")` and `vm.envString(...)` read the process
+environment from inside a Solidity test. Until Build 017 every one of those
+processes inherited the operator's complete environment.
+
+| | policy |
+| --- | --- |
+| environment | **allowlist** — only what a toolchain needs to start. On one developer machine that passed 25 names and withheld 83 |
+| filesystem | a disposable working directory per execution; the target tree is read, never written |
+| process | **not sandboxed** — tools run as you, on your host |
+| operator code | `--pack` and `--fixture` execute Python, and load only from a path you pass on the command line — never discovered inside the target |
+
+An allowlist rather than a denylist, because a denylist is a list of the
+secrets somebody thought of and the one that leaks is the one nobody named. If
+a toolchain needs something unforeseen it stops working loudly, and you opt it
+back in by name:
+
+```bash
+CRYSTAL_PASS_ENV=MY_REGISTRY_TOKEN crystal validate ./target --backend medusa
+```
+
+Opting back in is recorded in the isolation report, so the decision stays
+visible rather than becoming a forgotten default.
+
+**The third row is the one that matters.** Crystal confines the filesystem and
+the environment; it does not run the tool under a different user, a container
+or a VM. A fuzzer executing a target's bytecode has your rights. Analyse
+something genuinely hostile inside a disposable machine — and `crystal doctor`
+prints all four rows so you can check rather than assume.
+
+`HOME` is passed, because no toolchain resolves without it. That is a real
+concession and it is stated rather than glossed: configuration under it, such
+as `~/.foundry/foundry.toml`, is reachable by the target's tooling.
 
 ## Validation backends
 

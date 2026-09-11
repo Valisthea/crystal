@@ -261,8 +261,12 @@ def execute_hypothesis(project, contracts, hypothesis, timeout=120):
         for name, source in plan.sources.items():
             shutil.copy2(source, root / "src" / f"{name}.sol")
         (root / "test" / "CrystalHarness.t.sol").write_text(harness, encoding="utf-8")
+        # `ffi` lets a test run arbitrary host commands, and this harness is
+        # compiled from a contract Crystal did not write. Foundry defaults it
+        # off; the file is ours, so the decision is stated rather than assumed.
         (root / "foundry.toml").write_text(
-            "[profile.default]\nsrc = 'src'\ntest = 'test'\nout = 'out'\n",
+            "[profile.default]\nsrc = 'src'\ntest = 'test'\nout = 'out'\n"
+            "ffi = false\n",
             encoding="utf-8",
         )
         completed = process.run(

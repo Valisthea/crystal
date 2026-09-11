@@ -240,7 +240,11 @@ def _plan(project, contracts, protocol_invariants, results: list):
             continue
         artifacts = {
             HARNESS_FILE: source,
-            "foundry.toml": "[profile.default]\nsrc = 'src'\ntest = 'test'\n",
+            # `ffi = false` stated rather than inherited from Foundry's
+            # default: this harness is built from a contract Crystal did not
+            # write, and `vm.ffi` would hand it the host.
+            "foundry.toml": ("[profile.default]\nsrc = 'src'\ntest = 'test'\n"
+                             "ffi = false\n"),
         }
         planned.append((contract, tuple(properties), tuple(unsupported), tests, artifacts))
     if not planned:
@@ -407,7 +411,11 @@ def generate(project, contracts, protocol_invariants=()) -> list[BackendExecutio
         lines = tuple(issue.line() for issue in report.for_contract(contract.name))
         out.append(BackendExecution(
             NAME, GENERATED, contract.name, tuple(tests),
-            {HARNESS_FILE: artifacts[HARNESS_FILE]}, unsupported=unsupported,
+            # The config travels with the harness. Dropping it left an
+            # operator running the persisted harness under whatever
+            # `foundry.toml` their directory happened to hold — including one
+            # with `ffi` on, which is the setting this file exists to pin.
+            dict(artifacts), unsupported=unsupported,
             reason="; ".join(issue.message for issue in report.blocking(contract.name)),
             preflight=lines,
         ))

@@ -1,5 +1,112 @@
 # Changelog
 
+## Crystal V1.00 Build 017 — what the target's tooling could read
+
+Section 22 of the architecture brief requires that analysed code run without
+reach into host credentials. The first step of the evolution plan
+([docs/EVOLUTION_ASSESSMENT.md](docs/EVOLUTION_ASSESSMENT.md)) put isolation
+ahead of the scheduler because it is the only gap on that list that can hurt
+the operator rather than the results.
+
+Measured on this checkout, 2026-09-11, by running a real child process and
+reading what it received:
+
+```
+before:  PRIVATE_KEY= 0xdeadbeef_operator_key | ETH_RPC_URL= https://rpc.example/KEYMATERIAL
+after :  PRIVATE_KEY= None                    | ETH_RPC_URL= None                    | PATH set= True
+```
+
+This was not theoretical. Foundry hands a Solidity harness
+`vm.envUint("PRIVATE_KEY")` and `vm.envString(...)`, and that harness is
+compiled from a contract Crystal did not write. Every backend run put the
+operator's deploy key, RPC tokens and cloud credentials inside reach of the
+target's own code.
+
+### What changed
+
+New `crystal/isolation/`. `process.run` now builds a child environment by
+**allowlist** and no longer inherits `os.environ`.
+
+An allowlist, not a denylist, and the choice is not stylistic: a denylist of
+`PRIVATE_KEY`, `*_TOKEN`, `AWS_*` is a list of the secrets somebody thought of,
+and the one that leaks is the one nobody named. An allowlist fails the other
+way — a toolchain that needs something unforeseen stops working loudly, and
+`CRYSTAL_PASS_ENV=NAME` opts it back in, recorded in the isolation report so
+the decision stays visible.
+
+| | policy |
+| --- | --- |
+| environment | allowlist; on one developer machine, 25 names passed and 83 withheld |
+| filesystem | already correct — a disposable working directory per execution |
+| process | **not sandboxed**, and now says so |
+| operator code | `--pack`/`--fixture` only from a command-line path, never discovered in the target |
+
+`inherit_environment=True` exists for one call site: `pip install -e .`, which
+acts on the operator's own checkout, where a proxy or certificate setting has
+to survive and no target code runs.
+
+The generated `foundry.toml` files now state `ffi = false` instead of relying
+on Foundry's default. `vm.ffi` would hand the host to a harness built from the
+target's code, and the file is ours, so the decision is stated.
+
+`crystal doctor` prints all four rows, and the same report travels in the scan
+payload and in the Arcadia hand-off — a consumer weighing a verdict needs to
+know what the run could reach.
+
+### Verified by running the tools, not by reading the code
+
+* **Halmos** (Python toolchain): `EXECUTED_PASS :: Vault — HELD 2`, proving the
+  `totalAssets/totalSupply` coherence and `nonce` monotonicity properties Build
+  016 grounded.
+* **Medusa** (Go toolchain): `EXECUTED_PASS :: Vault — HELD 2`.
+* `git`, `forge 1.6.0`, `medusa 1.5.1`, `halmos 0.3.3` and `solc` all probe
+  clean under the scrubbed environment.
+
+A first medusa run failed, and the cause was attributed before anything was
+concluded: the host `solc` is 0.8.17 and the fixture declared `^0.8.20`. The
+same failure reproduced with the full environment, so it was not the change.
+
+### Two defects found while testing this
+
+1. **Windows stores environment names upper-cased.** `os.environ` looks up
+   `SystemRoot` case-insensitively but *iterates* `SYSTEMROOT`, so exact
+   matching against the allowlist withheld the one variable without which a
+   Windows child fails before its first instruction. Matching is now
+   case-insensitive on `nt` and exact on POSIX, where `path` and `PATH` are
+   genuinely different variables.
+2. **`halmos --generate-only` did not emit its `foundry.toml`.** An operator
+   persisting the harness to run by hand got the test and not the config —
+   losing precisely the file that turns `ffi` off. `generate()` now returns the
+   artifacts it would have run under.
+
+### Tests
+
+`tests/test_v300_isolation.py` — 16 tests. Four carry `@pytest.mark.invariant`
+and join the named CI gate, which grows from 8 to 12: a secret does not reach a
+launched tool, the policy is an allowlist rather than a list of known secrets,
+pack discovery never reads the analysed target, and the report states that the
+process is not sandboxed — that last one so the honest line cannot be quietly
+dropped.
+
+The tests that assert a secret does not escape **run a real subprocess and read
+what it received**. Inspecting the dictionary Crystal builds would pass even if
+the dictionary were never handed to `subprocess.run`, which is the bug.
+
+508 collected. 506 passed, 2 xfailed under tree-sitter; 483 passed, 24 skipped,
+1 xfailed under `CRYSTAL_NO_TREESITTER=1`.
+
+### What this does not do
+
+It does not sandbox anything. Crystal confines the environment and the
+filesystem; the tool still runs as the operator, on the operator's host, and a
+fuzzer executing a target's bytecode has the operator's rights. Container or VM
+isolation is the layer Crystal does not provide, and `isolation_report()` says
+so in the payload rather than leaving a reader to assume otherwise.
+
+`HOME` is passed because no toolchain resolves without it, so configuration
+under it — `~/.foundry/foundry.toml`, and an RPC URL an operator keeps there —
+remains reachable by the target's tooling. Stated, not glossed.
+
 ## Crystal V1.00 Build 016 — the invariants that were reading names
 
 Measured on the Lido stonks protocol (`lidofinance/stonks`, 58 sources,
