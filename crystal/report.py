@@ -461,6 +461,9 @@ def payload(result):
             "severity_decision": False,
             "submission_decision": False,
         },
+        # Who produced this, from what, under which configuration. Content
+        # addressed and clock-free, so two runs over the same sources agree.
+        "producer_provenance": result.get("producer_provenance", {}),
         # Which sequence hypotheses got one of the symbolic budget's slots,
         # and what the budget did not reach. 48 of 198 used to be discarded
         # here without a line of output.
@@ -930,6 +933,7 @@ def arcadia(data) -> dict:
         "evidence_records": data["evidence_records"],
         "isolation": data.get("isolation", {}),
         "sequence_budget": data.get("sequence_budget", {}),
+        "producer_provenance": data.get("producer_provenance", {}),
         "campaigns": data.get("campaign_results", []),
         "gate": data["finding_gate"],
         "quality": data["quality_report"],

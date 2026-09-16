@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 018</h1>
+<h1 align="center">Crystal V1.00 Build 019</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -14,7 +14,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-523%20passing-brightgreen">
+  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-541%20passing-brightgreen">
   <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -23,7 +23,7 @@
 
 > ### Beta
 >
-> Crystal is in **beta** and moving fast — eighteen builds, several of which
+> Crystal is in **beta** and moving fast — nineteen builds, several of which
 > corrected the build before them. Treat its output as a starting point for
 > your own reading, never as a verdict.
 >
@@ -615,6 +615,66 @@ The second chain is not Crystal's job.
    `kind: review`. Crystal will not tell your CI that something is broken.
 
 ---
+
+## What a research proposal carries
+
+`ResearchCandidate` is the record a parent system reads. Until Build 019 it was
+the thinnest record in the pipeline: detector signals carry a falsification
+tuple, evidence records carry limitations and provenance, and the core
+hypothesis pass computes a rationale — the candidate carried none of them, and
+the rationale was computed and then dropped by the constructor.
+
+```json
+{
+  "id": "6f9705b8ace66361",
+  "title": "Check ordering/invariant consistency for Vault.balances",
+  "rationale": "A shared state variable is read and written across multiple entry points...",
+  "falsification": ["[reentrancy-ordering on Vault.withdraw] Is the external callee trusted and immutable?"],
+  "assumptions": ["inherits the premise of `reentrancy-ordering` on Vault.withdraw"],
+  "missing": ["limitations"],
+  "provenance": { "producer": "crystal", "source_digest": "576929de...", "configuration_digest": "b7103d78..." }
+}
+```
+
+Two rules, which are the same rule twice:
+
+- **Nothing is invented.** A producer that supplies no falsification leaves the
+  field empty and is named in `missing`. A generic sentence there would be worse
+  than the gap, because a reader would stop looking for the real one.
+- **Falsification is cited, never composed.** Where a detector already reasoned
+  about how its own signal could be wrong, the candidate references it by
+  detector and function. Writing a new one at that layer would be protocol
+  interpretation, which Crystal does not do.
+
+Measured on two protocols, **candidate counts unchanged** — this is not a
+build that produces more:
+
+| | stonks | Flyover bridge |
+| --- | ---: | ---: |
+| candidates | 476 | 353 |
+| carrying a rationale | 0 → **100%** | 0 → **100%** |
+| carrying a cited falsification | 0 → **55%** | 0 → **23%** |
+| stamped with provenance | 0 → **100%** | 0 → **100%** |
+| declaring their own gaps | 0 → **100%** | 0 → **100%** |
+
+### Provenance carries no clock
+
+`producer_provenance` is content-addressed: the same sources under the same
+configuration produce the same digests on any machine, on any day. A timestamp
+would make every run differ and turn determinism checks into noise. Source
+digests are taken over content relative to the project root, so touching a file
+does not change them and an absolute path never reaches the record.
+
+Provenance is never inferred. A record that lacks it keeps lacking it —
+`merge_missing` fills only absent keys and names which ones it filled, so an
+original stamp stays distinguishable from a repaired one.
+
+### It survives a restart
+
+Falsification, assumptions and provenance reach the file a parent process
+actually reads, and the test that says so **spawns a second interpreter** to
+check. Asserting that a dataclass round-trips through `asdict` proves
+serialisation, not persistence.
 
 ## How the symbolic budget is spent
 

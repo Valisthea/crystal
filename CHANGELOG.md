@@ -1,5 +1,131 @@
 # Changelog
 
+## Crystal V1.00 Build 019 — the canonical proposal carried none of what its producers knew
+
+Steps 2, 3 and 4 of the MIRA roadmap: remove hypothesis-model duplication,
+persist falsification, harden provenance. The audit that precedes them
+([docs/EVOLUTION_ASSESSMENT.md](docs/EVOLUTION_ASSESSMENT.md)) described step 2
+wrongly, and correcting it is most of this build.
+
+### The duplication was not what the audit said
+
+There was never a competing hypothesis *model*. `ResearchCandidate` in
+`quality/triage.py` was already canonical, `crystal/hypotheses.py` is one of
+three producers feeding it rather than a rival output, and `result["hypotheses"]`
+reaches no payload at all.
+
+What did exist was **dead code**. `crystal/ranking.py` sorted the hypotheses by
+priority, and `build_candidates` then re-sorted every proposal by confidence —
+so its only consumer discarded the ordering. Measured before removing it:
+candidate ids are byte-identical with that ordering correct, reversed, or
+absent. Removed, with the measurement recorded as the reason (§41).
+
+### The real gap, and it was worse
+
+The record a parent system reads carried **neither falsification nor
+limitations nor rationale**, while its producers computed all three:
+
+* the nine detector modules each carry a `FALSIFICATION` tuple;
+* `EvidenceRecord` carries `limitations` and `provenance`;
+* `models.Hypothesis` carries a `rationale` — **computed, then dropped on the
+  floor** by the constructor in `triage.py`.
+
+`ResearchCandidate` now carries `rationale`, `falsification`, `assumptions`,
+`limitations`, `provenance` and `missing`, under two rules that are the same
+rule twice:
+
+**Nothing is invented.** A producer that supplies no falsification leaves the
+field empty and is named in `missing`. A generic sentence in that slot would be
+worse than the gap, because a reader would stop looking for the real one.
+
+**Falsification is cited, never composed.** Where a detector already reasoned
+about how its own signal could be wrong, the candidate references it by detector
+and function:
+
+```
+[reentrancy-ordering on Vault.withdraw] Is the external callee trusted and immutable?
+```
+
+Composing a new one at that layer would be protocol interpretation, which
+Crystal does not do.
+
+### Provenance
+
+New `crystal/provenance.py`, content-addressed and **clock-free**. The same
+sources under the same configuration produce the same digests on any machine,
+on any day; a timestamp would make every run differ and turn the determinism
+checks of §29 into noise. Source digests are taken over file *content* relative
+to the project root, so touching a file does not change them and an absolute
+path never reaches the record.
+
+Provenance is never inferred from the current tree (§11). `merge_missing` fills
+only absent keys and names which ones it filled, so an original stamp stays
+distinguishable from a repaired one. A tool that was never probed is absent from
+`tool_versions` rather than recorded as unavailable — those are different
+claims, and only the first is true.
+
+### Identity deliberately untouched
+
+`stable_id` still reads exactly `(category, title, evidence, path)`. Adding any
+new field to the identity material would have silently reissued every candidate
+id in the corpus, which §12 forbids and which a test now pins.
+
+### Measured, two protocols, counts unchanged
+
+| | stonks | Flyover bridge |
+| --- | ---: | ---: |
+| candidates | 476 | 353 |
+| carrying a rationale | 0 → **476 (100%)** | 0 → **353 (100%)** |
+| carrying a cited falsification | 0 → **266 (55%)** | 0 → **82 (23%)** |
+| stamped with provenance | 0 → **100%** | 0 → **100%** |
+| declaring their own gaps | 0 → **100%** | 0 → **100%** |
+
+The counts are identical before and after. This build produces no more
+proposals; it produces proposals that say what they rest on and how to break
+them.
+
+### Mutation-tested, not just asserted
+
+Two mutations were introduced and both were killed by the new suite:
+
+| mutation | killed by |
+| --- | --- |
+| the candidate stops carrying falsification | the citation test **and the process-restart test** |
+| `missing` stops naming absent fields | the two no-invention invariants |
+
+The second result matters more than the first: it confirms the restart test
+genuinely reads the written file rather than passing on an in-memory shortcut.
+
+### Tests
+
+`tests/test_v300_proposal.py` — 18 tests, six of them invariants; the named CI
+gate grows from 14 to 20. The one worth naming:
+`test_falsification_and_provenance_survive_a_process_restart` **spawns a second
+interpreter**. Asserting that a dataclass round-trips through `asdict` proves
+serialisation, not persistence, and the roadmap's §10 asks whether a later
+process can read Crystal's evidence and learn what would falsify it.
+
+541 collected. 539 passed, 2 xfailed under tree-sitter; 516 passed, 24 skipped,
+1 xfailed under `CRYSTAL_NO_TREESITTER=1`.
+
+### Also
+
+[docs/mira-integration.md](docs/mira-integration.md) — the seam as it actually
+stands, what exists, what does not, and the one naming decision the adapter
+needs before it can be addressed: Crystal's hand-off is versioned
+`crystal-arcadia/2.0`, and under the MIRA layering Arcadia is no longer the top.
+
+### What this does not do
+
+It does not give Crystal a question model. Candidates are still answers to
+"what did you find", not to "can you establish X" — that is step 5, and it is
+the one that changes Crystal's character rather than its records.
+
+45% of stonks proposals and 77% of Flyover's still carry no falsification,
+because no detector fired on their path and nothing else in Crystal is entitled
+to write one. That number is the honest measure of how much of the corpus is
+currently un-refutable, and it is reported rather than filled in.
+
 ## Crystal V1.00 Build 018 — the budget that was spent alphabetically
 
 Second step of the plan in [docs/EVOLUTION_ASSESSMENT.md](docs/EVOLUTION_ASSESSMENT.md).

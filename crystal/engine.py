@@ -8,6 +8,7 @@ from .compiler.solc import compile_standard
 from .composition import build_composition
 from .detectors import run_detectors
 from .discovery import discover, excluded_dir_reason, profile
+from .provenance import producer_provenance
 from .graphs.callgraph import build_call_graph
 from .graphs.cfg import build_cfg
 from .graphs.program import build_graph
@@ -20,7 +21,6 @@ from .protocol.invariants import derive_protocol_invariants
 from .protocol.model import build_protocol_model
 from .quality.triage import build_candidates
 from .quality.validation import validate
-from .ranking import rank
 from .research.engine import run_research
 from .semantics.dataflow import build_dataflow
 from .semantics.inheritance import build_inheritance_graph, link_inheritance
@@ -83,7 +83,12 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
     inheritance = link_inheritance(contracts)
 
     observations = analyze(contracts)
-    hypotheses = rank(generate(observations))
+    # Not ranked. `crystal/ranking.py` sorted these by priority and was
+    # removed in Build 019: `build_candidates` re-sorts every proposal by
+    # confidence, so the ordering was discarded by its only consumer, and
+    # `result["hypotheses"]` reaches no payload. Measured — candidate ids are
+    # identical with that ordering correct, reversed, or absent.
+    hypotheses = generate(observations)
 
     symbolic_engine = SymbolicEngine(contracts)
     detector_signals = run_detectors(
@@ -139,6 +144,24 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
         # v2 additions.
         "symbolic_engine": symbolic_engine,
         "project_profile": profile(project, sources),
+        # Stamped once, from what this run actually used. Content-addressed so
+        # the same sources under the same configuration produce the same
+        # provenance on any machine — see `crystal/provenance.py` for why it
+        # carries no clock.
+        "producer_provenance": producer_provenance(
+            project=project,
+            sources=sources,
+            configuration={
+                "use_solc": use_solc,
+                "use_foundry": use_foundry,
+                "languages": tuple(languages) if languages else None,
+                "run_detector_pass": run_detector_pass,
+                "detectors": tuple(detectors) if detectors else None,
+                "include_tests": include_tests,
+                "packs": tuple(str(pack) for pack in packs or ()),
+            },
+            parsers={"solidity": parsed.parser},
+        ),
         "parsers": parser_report(),
         "parser_backends": parsed.parser,
         "parse_diagnostics": parsed.diagnostics,

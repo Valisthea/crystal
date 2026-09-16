@@ -143,12 +143,25 @@ detector signal on the same storage slot — are reported as two things. §14 an
 
 ### 5. Two hypothesis generations coexist
 
-`crystal/hypotheses.py` is 60 lines of v1-era generation and `crystal/ranking.py`
-is six lines sorting on a priority integer. Both are still imported. The real
+> **Corrected by Build 019.** There was never a competing *model*. `ResearchCandidate`
+> in `quality/triage.py` was already canonical: `hypotheses.py` is one of three
+> producers feeding it, not a rival output, and `result["hypotheses"]` reaches
+> no payload. What did exist was dead code — `crystal/ranking.py` sorted the
+> hypotheses and `build_candidates` re-sorted every proposal by confidence, so
+> the ordering was discarded by its only consumer. Measured before removal:
+> candidate ids are byte-identical with that ordering correct, reversed, or
+> absent. Removed in 019.
+>
+> The real gap was the one below, and it was worse than described: the canonical
+> record carried neither falsification nor limitations nor rationale, while its
+> producers computed all three. `models.Hypothesis.rationale` was built and
+> dropped by the constructor. Fixed in 019; falsification is now cited from the
+> detector that fired on the path, never composed at that layer.
+
+`crystal/hypotheses.py` is 60 lines of v1-era generation. The real
 work happens in `research/engine.py` and `campaigns/scoring.py`, which scores
-novelty × state significance × causal depth × exploitability. The v1 pair
-should be retired or absorbed, not left as a second answer to the same
-question. Neither carries the fields §9 requires — prerequisites, actors,
+novelty × state significance × causal depth × exploitability. Neither carries
+all the fields §9 requires — prerequisites, actors,
 assets, expected impact, verification method.
 
 ### 6. Resource isolation is not implemented — this is a security gap
@@ -245,7 +258,8 @@ it is a security gap:
 1. ~~**017 — isolation** (C.6)~~ — shipped.
 2. ~~**018 — scheduler** (C.1)~~ — shipped, having first corrected what the
    budget actually was.
-3. **019 — request contract** (C.2). Measured by Arcadia being able to ask a
+3. ~~**019 — canonical proposal, falsification and provenance**~~ — shipped.
+4. **020 — question model, then the request contract** (C.2). Measured by Arcadia being able to ask a
    scoped question and get a scoped answer.
 4. **020 — evidence graph and root-cause merge** (C.4, C.5).
 5. **021 — knowledge model and composition** (C.3).
