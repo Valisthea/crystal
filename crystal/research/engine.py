@@ -142,7 +142,9 @@ def run_research(result):
     # and whatever the budget did not reach is reported instead of vanishing.
     allocation = schedule_sequences(
         result["sequence_hypotheses"],
-        budget=SEQUENCE_BUDGET,
+        # A `ResearchQuestion` may narrow this; nothing may widen it. Absent a
+        # question, the build default stands exactly as before.
+        budget=result.get("sequence_budget_limit", SEQUENCE_BUDGET),
         detectors=result.get("detectors", ()),
         contracts=contracts,
     )

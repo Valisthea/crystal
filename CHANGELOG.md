@@ -1,5 +1,181 @@
 # Changelog
 
+## Crystal V1.00 Build 020 — Crystal can finally be asked something
+
+Step 5 of the MIRA roadmap: the `ResearchQuestion` input contract. Until now
+there was one way in — `research(project, use_solc=..., packs=...)` — and it
+describes *how to run the tool*, never what security question the run should try
+to settle.
+
+What this establishes is narrow, and worth stating plainly rather than letting
+the size of the change imply more: **Crystal can be asked something through a
+formal contract.** It does not mean Crystal understands the question
+semantically, nor that anything can yet schedule it.
+
+### Baseline first (§37)
+
+Recorded before any strategy code moved, on two real protocols:
+
+| | stonks | Flyover |
+| --- | ---: | ---: |
+| wall time | 8.29 s | 8.59 s |
+| peak Python memory | 9.9 MB | 7.5 MB |
+| contracts / sources | 47 / 58 | 17 / 73 |
+| detector signals | 58 | 3 |
+| research candidates | 476 | 353 |
+| state deltas | 150 of 198 | 150 of 250 |
+| confirmed findings | 0 | 0 |
+
+No claim is made that `ResearchQuestion` improves research quality. This step
+establishes the input contract.
+
+### Three refusals, each guarding a silent failure
+
+**The world is never assumed.** A missing `source_snapshot` is an error, not a
+default — substituting the current checkout answers a question about a tree the
+asker never described. A caller who wants resolution at execution passes
+`AT_EXECUTION`, which is recorded and warned about.
+
+**An empty surface never means everything.** It means "discover it", and only
+with `discover_surface=True`.
+
+**A constraint Crystal cannot enforce is an error.** One accepted and then
+ignored produces a result that looks bounded when it was not, and nothing
+downstream can tell. Enforceable today: `excluded_paths`, `max_sequence_length`,
+`symbolic_budget`, `timeout_seconds`. `allowed_paths` is declared *not* enforced
+and the run says so.
+
+### The contract
+
+`crystal/question/` — `model.py`, `capabilities.py`, `validation.py`,
+`serialization.py`, `strategy.py`, `runner.py`, `legacy.py`.
+
+* **Identity is content-derived.** The same question about the same world is
+  recognisably the same question. Provenance is excluded from it on purpose:
+  *who* asked does not change *what* was asked, and including it would make two
+  identical questions from two callers look like two questions.
+* **`schema_version` is `MAJOR.MINOR`.** An unknown MAJOR is refused before any
+  field is interpreted. An unknown MINOR field is ignored — which is safe
+  *because* the identity check runs afterwards: if it carried meaning, the
+  reconstructed id will not match and the load fails loudly.
+* **Question is not hypothesis**, carried in separate fields and never merged.
+  Merging would let a proposal arrive disguised as an open question.
+* **A capability is a kind of analysis, never a tool name.** A question asks for
+  `symbolic`, not for Halmos. Every capability in the registry has a real
+  provider in this repository; an unknown one is refused.
+* **`export()` hands the registry to a parent without availability.** What
+  Crystal can be asked is a property of Crystal; what is installed is a property
+  of a machine, and a parent that conflates them plans against one host.
+
+### Blocked is not "found nothing"
+
+`EXECUTED` · `REFUSED_INVALID` · `REFUSED_UNPLANNABLE`. An invalid question does
+not run — a validator whose verdict can be ignored is documentation. An
+unplannable one does not run either, and the obstructions come back in place of
+a result.
+
+`depth="adaptive"` is declared by the schema and **not implemented**, so it is
+planned as an obstruction rather than quietly downgraded to `standard`. Silently
+answering an easier question is the failure this contract exists to prevent.
+
+Information gain is reported as `"not measured"` on every strategy record.
+Nothing here models it, and a made-up number is worse than a gap because it
+would be summed, sorted and believed.
+
+Statuses are local to a run. There is no `COMPLETE` and no `CONFIRMED`, and a
+test asserts the module exposes no status containing either word.
+
+### Two defects found while building this
+
+1. **A constraint that looked applied and was not.** `excluded_paths` was
+   recorded in `narrowed` and never reached the engine — exactly the §13 failure
+   the constraint list exists to prevent, committed while implementing the rule
+   against it. Now enforced in `research()`, matched on **path segments** so
+   excluding `test` drops `test/Foo.sol` and never `latest/Foo.sol`. Measured on
+   stonks: `excluded_paths: ["stubs"]` takes the run from 58 sources / 47
+   contracts to 46 / 32.
+2. **A budget applied after the run.** The first `execute()` set the symbolic
+   limit on the result *after* `research()` had already spent it. Caught by
+   printing the two numbers side by side — the plan said 7, the run said 150.
+
+A third, smaller: `crystal.question.execute` the module and `execute` the
+function collided, so `crystal.question.execute` resolved to the function. The
+module is now `runner.py`.
+
+### Mutation suite, §35 A–J
+
+Every test breaks the real code, confirms the damage occurs, and then confirms
+the guard fires on the unmutated path. That double check is the point: §32 warns
+against mutations structurally incapable of causing the damage being tested.
+
+| | mutation | killed by |
+| --- | --- | --- |
+| A | ignore `source_snapshot` | `snapshot.missing` |
+| B | empty surface means the whole project | `surface.empty` |
+| C | accept an unknown capability | `capability.unknown` |
+| D | drop prior evidence | `StrategyPlan.prior_evidence` |
+| E | widen the caller's budget | narrowest-of-three |
+| F | trust a recorded id instead of checking it | `SemanticDrift` |
+| G | accept an unknown schema MAJOR | `UnsupportedSchema` |
+| H | inject global authority into a question | dropped on load |
+| I | identity computed over something else | `SemanticDrift` |
+| J | claim fidelity in the lossy legacy direction | `lost` |
+
+**Mutation D tested nothing when first written.** Prior evidence was validated
+and then dropped, so "ignore prior evidence" was already the behaviour. Rather
+than ship a test that could not fail, the plan was changed to carry it — which
+is what makes the mutation meaningful. It still does not *steer* selection; that
+is adaptive strategy, and it is not built.
+
+### End to end on a real target (§49)
+
+A question about `lidofinance/stonks` — stale-price quote versus the margin
+relation — validated, serialised, reloaded, planned and executed:
+
+```
+question_id   8471ecc56a5b328b08909325c7159caa
+snapshot      main / bed526ee… over 60 sources
+survives disk True
+selected      composition-chain, detector-pass, symbolic-sequence
+rejected      4, each with a reason
+budget        60   (depth 150 → constraint 60 → budget 60)
+honoured      60 of 198 hypotheses; 138 deferred and reported
+attributable  True
+```
+
+No claim is made here about the security of that protocol. This exercises the
+contract, not the target.
+
+### Tests
+
+`tests/test_v300_question.py` (57) and `tests/test_v300_question_mutations.py`
+(17). The named CI gate grows from 20 to 45. The cross-process replay spawns a
+second interpreter with `PYTHONPATH` pinned to the checkout — outside the
+repository `crystal` resolves to whatever is installed, and the test would then
+pass or fail on the install rather than on the contract.
+
+615 collected. 613 passed, 2 xfailed under tree-sitter; 590 passed, 24 skipped,
+1 xfailed under `CRYSTAL_NO_TREESITTER=1`.
+
+### Backward compatibility
+
+`research(...)` is unchanged for every existing caller and gains two optional
+keywords, `sequence_budget` and `excluded_paths`, both no-ops when absent. All
+541 pre-existing tests pass untouched. `from_legacy_call()` shows what an
+existing invocation actually asks for; `to_legacy_kwargs()` maps back and names
+what it cannot carry.
+
+### What this does not do
+
+It does not narrow the analysis by `affected_surface`. Crystal discovers its own
+surface, and `QuestionRun.unapplied` says so on every run — a result claiming
+the question scoped it would be the silent substitution the contract exists to
+prevent.
+
+It does not re-plan, rank strategies by expected value, or model cost. It does
+not make Crystal understand a question: `question` is a string Crystal stores,
+validates the form of, and attributes results to. Reading it is a later step.
+
 ## Crystal V1.00 Build 019 — the canonical proposal carried none of what its producers knew
 
 Steps 2, 3 and 4 of the MIRA roadmap: remove hypothesis-model duplication,

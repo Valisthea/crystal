@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 019</h1>
+<h1 align="center">Crystal V1.00 Build 020</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -14,7 +14,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-541%20passing-brightgreen">
+  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-615%20passing-brightgreen">
   <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -23,7 +23,7 @@
 
 > ### Beta
 >
-> Crystal is in **beta** and moving fast — nineteen builds, several of which
+> Crystal is in **beta** and moving fast — twenty builds, several of which
 > corrected the build before them. Treat its output as a starting point for
 > your own reading, never as a verdict.
 >
@@ -615,6 +615,73 @@ The second chain is not Crystal's job.
    `kind: review`. Crystal will not tell your CI that something is broken.
 
 ---
+
+## Asking Crystal a question
+
+Until Build 020 there was one way in — `research(project, use_solc=..., packs=...)`
+— and it describes *how to run the tool*, never what security question the run
+should try to settle. `ResearchQuestion` is that missing half.
+
+```python
+from crystal.question import ResearchQuestion, SourceSnapshot, Surface, Target, execute
+
+asked = ResearchQuestion(
+    question="Can a quote produced under a stale Chainlink price still satisfy "
+             "isValidSignature without the margin relation being preserved?",
+    target=Target(target_id="lidofinance/stonks@main"),
+    source_snapshot=SourceSnapshot(revision="main", tree_digest="bed526ee…"),
+    affected_surface=(Surface("function", "Order.isValidSignature"),),
+    required_capabilities=("static", "symbolic", "composition"),
+    constraints={"symbolic_budget": 60, "excluded_paths": ["stubs"]},
+    depth="standard",
+)
+run = execute(asked, "./stonks/contracts")
+```
+
+Three refusals do most of the work, and each guards a failure that is silent by
+nature:
+
+- **The world is never assumed.** A missing `source_snapshot` is an error, not a
+  default. Substituting the current checkout answers a question about a tree the
+  asker never described. A caller who wants resolution at execution says so, and
+  it is recorded.
+- **An empty surface never means everything.** It means "discover it", and only
+  when `discover_surface=True` was asked for.
+- **A constraint Crystal cannot enforce is an error.** One accepted and then
+  ignored produces a result that looks bounded when it was not.
+
+A capability is a kind of analysis, never a tool name: a question asks for
+`symbolic`, not for Halmos. An unknown one is refused rather than dropped.
+
+Identity is content-derived, so the same question about the same world is
+recognisably the same question — and `with_provenance()` does not move it,
+because who asked does not change what was asked.
+
+### Blocked is not "found nothing"
+
+```
+EXECUTED  ·  REFUSED_INVALID  ·  REFUSED_UNPLANNABLE
+```
+
+An invalid question does not run; a validator whose verdict can be ignored is
+documentation. An unplannable one does not run either, and the obstructions come
+back in place of a result. `depth="adaptive"` is declared by the schema and not
+implemented, so it is planned as an obstruction rather than quietly downgraded
+to `standard`.
+
+Every run says what the question changed (`narrowed`) and what it asked for and
+did not get (`unapplied`) — today that includes `affected_surface`, which does
+not yet scope the analysis.
+
+Budgets are ceilings and are taken narrowest, never widest:
+
+```
+depth deep (300)  →  constraint symbolic_budget 60  →  budget 60   ⇒   60
+```
+
+Full contract, validation codes, persistence and the legacy migration path:
+[docs/research-question.md](docs/research-question.md). The boundary with the
+layers above: [docs/mira-integration.md](docs/mira-integration.md).
 
 ## What a research proposal carries
 

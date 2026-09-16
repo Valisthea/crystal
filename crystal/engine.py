@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .analysis import analyze
 from .campaigns import discover_packs, run_campaigns
 from .compiler.solc import compile_standard
@@ -47,9 +49,37 @@ def _unbounded_by_contract(signals) -> dict[str, list[str]]:
     return found
 
 
+def _under_any(source, root, prefixes) -> bool:
+    """Whether a discovered file sits under one of the excluded path prefixes.
+
+    Compared on path segments rather than as a substring: excluding `test`
+    should drop `src/test/Foo.sol` and never `src/latest/Foo.sol`.
+    """
+    try:
+        relative = Path(source).resolve().relative_to(root)
+    except (ValueError, OSError):
+        return False
+    segments = relative.parts
+    return any(
+        tuple(Path(prefix).parts) == segments[:len(Path(prefix).parts)]
+        for prefix in prefixes
+    )
+
+
 def research(project, use_solc=True, languages=None, run_detector_pass=True,
-             use_foundry=True, detectors=None, include_tests=False, packs=()):
+             use_foundry=True, detectors=None, include_tests=False, packs=(),
+             sequence_budget=None, excluded_paths=()):
     sources = discover(project, languages=languages)
+    if excluded_paths:
+        # A caller's exclusion, applied here or not at all. A `ResearchQuestion`
+        # may declare it, and a constraint that is recorded but never applied
+        # makes a result look narrower than the run actually was.
+        root = Path(project).resolve()
+        dropped = tuple(str(part) for part in excluded_paths)
+        sources = [
+            source for source in sources
+            if not _under_any(source, root, dropped)
+        ]
     parsed = parse_project(sources)
     all_contracts = parsed.contracts
     # Fixtures are parsed and reported, but kept out of research. A mock runtime
@@ -185,6 +215,11 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
     registry = discover_packs(packs=packs)
     result["campaign_registry"] = registry
     result["campaign_packs"] = dict(registry.load_report)
+
+    if sequence_budget is not None:
+        # A `ResearchQuestion` narrowing the symbolic budget. Set before
+        # research runs: a limit applied afterwards is a limit nothing read.
+        result["sequence_budget_limit"] = int(sequence_budget)
 
     result = run_research(result)
     result["project"] = str(project)
