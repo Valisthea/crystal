@@ -22,10 +22,14 @@ from .capabilities import CAPABILITIES, KNOWN, availability, export, unknown
 from .runner import (
     EXECUTED,
     REFUSED_INVALID,
+    REFUSED_NO_SOURCES,
     REFUSED_UNPLANNABLE,
+    REFUSED_UNRESOLVED_SURFACE,
     QuestionRun,
     execute,
 )
+from .steering import Steering, steer
+from .surface import SurfaceResolution, resolve
 from .legacy import from_legacy_call, to_legacy_kwargs
 from .model import (
     AT_EXECUTION,
@@ -63,13 +67,17 @@ __all__ = [
     "PriorEvidence",
     "QuestionRun",
     "REFUSED_INVALID",
+    "REFUSED_NO_SOURCES",
     "REFUSED_UNPLANNABLE",
+    "REFUSED_UNRESOLVED_SURFACE",
     "ResearchQuestion",
     "SemanticDrift",
     "SourceSnapshot",
+    "Steering",
     "StrategyPlan",
     "StrategyRecord",
     "Surface",
+    "SurfaceResolution",
     "Target",
     "UnsupportedSchema",
     "ValidationResult",
@@ -83,6 +91,8 @@ __all__ = [
     "loads",
     "parse_guard",
     "plan",
+    "resolve",
+    "steer",
     "to_legacy_kwargs",
     "unknown",
     "validate",

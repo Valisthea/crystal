@@ -66,20 +66,29 @@ def _under_any(source, root, prefixes) -> bool:
     )
 
 
-def research(project, use_solc=True, languages=None, run_detector_pass=True,
-             use_foundry=True, detectors=None, include_tests=False, packs=(),
-             sequence_budget=None, excluded_paths=()):
+def select_sources(project, languages=None, excluded_paths=()):
+    """The files a run reads. One definition, used by research and by anything
+    that must see the same world before research starts.
+
+    A caller's exclusion is applied here or not at all. A `ResearchQuestion`
+    may declare it, and a constraint that is recorded but never applied makes a
+    result look narrower than the run actually was.
+    """
     sources = discover(project, languages=languages)
     if excluded_paths:
-        # A caller's exclusion, applied here or not at all. A `ResearchQuestion`
-        # may declare it, and a constraint that is recorded but never applied
-        # makes a result look narrower than the run actually was.
         root = Path(project).resolve()
         dropped = tuple(str(part) for part in excluded_paths)
         sources = [
             source for source in sources
             if not _under_any(source, root, dropped)
         ]
+    return sources
+
+
+def research(project, use_solc=True, languages=None, run_detector_pass=True,
+             use_foundry=True, detectors=None, include_tests=False, packs=(),
+             sequence_budget=None, excluded_paths=(), focus=None):
+    sources = select_sources(project, languages, excluded_paths)
     parsed = parse_project(sources)
     all_contracts = parsed.contracts
     # Fixtures are parsed and reported, but kept out of research. A mock runtime
@@ -220,6 +229,12 @@ def research(project, use_solc=True, languages=None, run_detector_pass=True,
         # A `ResearchQuestion` narrowing the symbolic budget. Set before
         # research runs: a limit applied afterwards is a limit nothing read.
         result["sequence_budget_limit"] = int(sequence_budget)
+    if focus:
+        # Resolved surface groups, `(label, functions)`, in the order the
+        # question ranks them. Set before research for the same reason.
+        result["sequence_focus"] = [
+            (label, frozenset(members)) for label, members in focus
+        ]
 
     result = run_research(result)
     result["project"] = str(project)

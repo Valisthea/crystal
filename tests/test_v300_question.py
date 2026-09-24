@@ -530,12 +530,24 @@ def probe(tmp_path):
     return tmp_path
 
 
+def asked(**overrides) -> ResearchQuestion:
+    """A question about code the probe fixture actually contains.
+
+    Build 020's execution tests asked about `Order.isValidSignature` against a
+    fixture with no such function, and passed — because the runner scanned the
+    whole project and filed the result under that question. Build 021 refuses
+    that, so these tests ask about something that exists.
+    """
+    overrides.setdefault("affected_surface", (Surface("function", "V.open"),))
+    return question(**overrides)
+
+
 @pytest.mark.invariant
 def test_a_question_narrows_the_budget_the_run_actually_spends(probe):
     """A limit applied after the run is a limit nothing read."""
     from crystal.question import execute
 
-    run = execute(question(constraints={"symbolic_budget": 7}), probe,
+    run = execute(asked(constraints={"symbolic_budget": 7}), probe,
                   use_solc=False)
     assert run.executed
     assert run.plan.symbolic_budget == 7
@@ -551,8 +563,8 @@ def test_a_declared_exclusion_actually_narrows_what_is_read(probe):
     (probe / "extra").mkdir()
     (probe / "extra" / "Other.sol").write_text(EXEC_FIXTURE, encoding="utf-8")
 
-    wide = execute(question(), probe, use_solc=False)
-    narrow = execute(question(constraints={"excluded_paths": ["extra"]}),
+    wide = execute(asked(), probe, use_solc=False)
+    narrow = execute(asked(constraints={"excluded_paths": ["extra"]}),
                      probe, use_solc=False)
 
     assert len(narrow.result["sources"]) < len(wide.result["sources"])
@@ -567,7 +579,7 @@ def test_an_exclusion_matches_path_segments_not_substrings(probe):
     (probe / "latest").mkdir()
     (probe / "latest" / "Keep.sol").write_text(EXEC_FIXTURE, encoding="utf-8")
 
-    run = execute(question(constraints={"excluded_paths": ["test"]}),
+    run = execute(asked(constraints={"excluded_paths": ["test"]}),
                   probe, use_solc=False)
     kept = {Path(source).name for source in run.result["sources"]}
     assert "Keep.sol" in kept
@@ -578,7 +590,7 @@ def test_an_invalid_question_does_not_run(probe):
     """A validator whose verdict can be ignored is documentation."""
     from crystal.question import REFUSED_INVALID, execute
 
-    run = execute(question(source_snapshot=SourceSnapshot()), probe,
+    run = execute(asked(source_snapshot=SourceSnapshot()), probe,
                   use_solc=False)
     assert run.status == REFUSED_INVALID
     assert run.result is None
@@ -590,7 +602,7 @@ def test_an_unplannable_question_is_blocked_not_reported_as_finding_nothing(prob
     """§26: 'blocked' and 'found nothing' must never be the same answer."""
     from crystal.question import REFUSED_UNPLANNABLE, execute
 
-    run = execute(question(depth="adaptive"), probe, use_solc=False)
+    run = execute(asked(depth="adaptive"), probe, use_solc=False)
     assert run.status == REFUSED_UNPLANNABLE
     assert run.result is None
     assert run.plan.obstructions
@@ -598,22 +610,29 @@ def test_an_unplannable_question_is_blocked_not_reported_as_finding_nothing(prob
 
 @pytest.mark.invariant
 def test_the_run_names_what_the_question_asked_for_and_did_not_get(probe):
-    """A surface that did not narrow the analysis is said, not implied."""
+    """A resolved surface steers the budget and says so; a missing or
+    unsupported item in the same question is named, not dropped."""
     from crystal.question import execute
 
-    run = execute(question(), probe, use_solc=False)
+    run = execute(asked(affected_surface=(
+        Surface("function", "V.open"),
+        Surface("function", "V.doesNotExist"),
+        Surface("asset_flow", "a->b"),
+    )), probe, use_solc=False)
     assert run.executed
-    assert any("affected_surface" in item for item in run.unapplied)
+    assert run.narrowed["symbolic_focus"] == ["function:V.open"]
+    assert any("V.doesNotExist" in item for item in run.unapplied)
+    assert any("asset_flow" in item for item in run.unapplied)
 
 
 def test_every_output_of_a_run_is_attributable_to_its_question(probe):
     from crystal.question import execute
 
-    asked = question(constraints={"symbolic_budget": 5})
-    run = execute(asked, probe, use_solc=False)
+    question_ = asked(constraints={"symbolic_budget": 5})
+    run = execute(question_, probe, use_solc=False)
     attached = run.result["research_question"]
-    assert attached["question_id"] == asked.question_id
-    assert attached["plan"]["question_id"] == asked.question_id
+    assert attached["question_id"] == question_.question_id
+    assert attached["plan"]["question_id"] == question_.question_id
     assert attached["status"] == "EXECUTED"
 
 
@@ -626,6 +645,9 @@ def test_a_run_status_is_local_and_carries_no_global_state():
         value for name, value in vars(execute_module).items()
         if name.isupper() and isinstance(value, str)
     }
-    assert statuses == {"EXECUTED", "REFUSED_INVALID", "REFUSED_UNPLANNABLE"}
+    assert statuses == {
+        "EXECUTED", "REFUSED_INVALID", "REFUSED_NO_SOURCES",
+        "REFUSED_UNRESOLVED_SURFACE", "REFUSED_UNPLANNABLE",
+    }
     for forbidden in ("COMPLETE", "CONFIRMED", "SATURATED", "APPROVED"):
         assert not any(forbidden in status for status in statuses)

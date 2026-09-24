@@ -106,6 +106,12 @@ candidate, and a campaign with no surface is indistinguishable at the output
 from one that looked and found nothing. That distinction is worth making, and
 it is what remains of this gap.
 
+> **Closed by Build 021.** Campaigns report `present`, `absent` or `unreached`.
+> Measured: of the empty campaigns, 8 of 9 on stonks and 11 of 14 on Flyover
+> were `unreached` — the target has what the premise covers and no executed
+> delta got there. Most "found nothing" was never "nothing there". A question's
+> surface now also steers the symbolic budget directly.
+
 ### 2. Arcadia can read Crystal but cannot direct it
 
 The output contract is in good shape — `report.arcadia()` emits eleven

@@ -28,7 +28,9 @@ import hashlib
 import json
 from dataclasses import dataclass, field, replace
 
-SCHEMA_VERSION = "1.0"
+# 1.1 adds `PriorEvidence.about`. Backward compatible: a 1.0 document reads
+# unchanged, and still verifies against the identity it was written with.
+SCHEMA_VERSION = "1.1"
 SCHEMA_MAJOR = 1
 
 # What a caller passes as the snapshot when the world is to be resolved at
@@ -178,6 +180,11 @@ class PriorEvidence:
     claim: str
     polarity: str = "inconclusive"
     provenance: dict = field(default_factory=dict)
+    # Schema 1.1. The surface this evidence is about. Without it the evidence
+    # is recorded and cannot steer anything: Crystal has no way to know which
+    # part of the target a free-text claim concerns, and guessing from the
+    # wording would be reading the claim, which Crystal does not do.
+    about: tuple["Surface", ...] = ()
 
     @property
     def sufficiently_provenanced(self) -> bool:
@@ -193,12 +200,17 @@ class PriorEvidence:
         )
 
     def as_dict(self) -> dict:
-        return {
+        record = {
             "evidence_id": self.evidence_id,
             "claim": self.claim,
             "polarity": self.polarity,
             "provenance": dict(sorted(self.provenance.items())),
         }
+        # Only when present, so a 1.0 document's evidence serialises to the
+        # bytes it always did.
+        if self.about:
+            record["about"] = [surface.as_dict() for surface in self.about]
+        return record
 
 
 @dataclass(frozen=True)
@@ -255,9 +267,16 @@ class ResearchQuestion:
         ).hexdigest()[:32]
 
     def semantic_content(self) -> dict:
-        """Everything that makes this question the question it is."""
+        """Everything that makes this question the question it is.
+
+        The schema MAJOR, not the full version. A MINOR is backward compatible
+        by definition — it cannot change what a question means — so it must
+        not change what a question *is*. Build 020 included the full string,
+        which would have reissued the identity of every question on each MINOR
+        bump; `legacy_question_id` keeps those documents verifiable.
+        """
         return {
-            "schema_version": self.schema_version,
+            "schema_major": self.schema_major,
             "question": self.question,
             "hypothesis": self.hypothesis,
             "target": self.target.as_dict(),
@@ -274,11 +293,43 @@ class ResearchQuestion:
 
     def as_dict(self) -> dict:
         """The full record, identity included."""
+        content = self.semantic_content()
+        content.pop("schema_major")
         return {
             "question_id": self.question_id,
-            **self.semantic_content(),
+            "schema_version": self.schema_version,
+            **content,
             "provenance": dict(sorted(self.provenance.items())),
         }
+
+    @property
+    def legacy_question_id(self) -> str:
+        """The identity Build 020 would have computed. Frozen; do not edit.
+
+        Used only to verify documents written under schema 1.0. It hashed the
+        full version string and had no `about` on evidence.
+        """
+        legacy = {
+            "schema_version": self.schema_version,
+            "question": self.question,
+            "hypothesis": self.hypothesis,
+            "target": self.target.as_dict(),
+            "source_snapshot": self.source_snapshot.as_dict(),
+            "affected_surface": [s.as_dict() for s in self.affected_surface],
+            "discover_surface": self.discover_surface,
+            "constraints": dict(sorted(self.constraints.items())),
+            "prior_evidence": [
+                {key: value for key, value in e.as_dict().items() if key != "about"}
+                for e in self.prior_evidence
+            ],
+            "required_capabilities": sorted(self.required_capabilities),
+            "budget": dict(sorted(self.budget.items())),
+            "depth": self.depth,
+            "expected_output": sorted(self.expected_output),
+        }
+        return hashlib.sha256(
+            canonical_json(legacy).encode("utf-8")
+        ).hexdigest()[:32]
 
     def with_provenance(self, **fields) -> "ResearchQuestion":
         """A copy carrying who asked. The identity does not move."""

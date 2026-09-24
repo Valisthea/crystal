@@ -80,6 +80,9 @@ class Allocation:
     # large the score is not doing the ranking, and the tiebreak is.
     tied_at_boundary: int = 0
     boundary_score: float | None = None
+    # When a question named a surface: per item, how many hypotheses touch it
+    # and how many of those the budget reached. Empty when nothing was asked.
+    focus: list[dict] = field(default_factory=list)
 
     def report(self) -> dict:
         return {
@@ -89,7 +92,16 @@ class Allocation:
             "deferred": len(self.deferred),
             "boundary_score": self.boundary_score,
             "tied_at_boundary": self.tied_at_boundary,
-            "ordering": "score, then downstream demand, then length and name",
+            "ordering": (
+                "question surface first, shared round-robin across its items; "
+                "then score, then downstream demand, then length and name"
+                if self.focus else
+                "score, then downstream demand, then length and name"
+            ),
+            "focus": list(self.focus),
+            "focus_uncovered": [
+                item["item"] for item in self.focus if item["touching"] == 0
+            ],
             "note": (
                 "deferred sequences were not executed because the symbolic "
                 "budget ran out, not because they were judged uninteresting. "
@@ -148,7 +160,42 @@ def demand_for(sequence, *, signalled, writes) -> Demand:
     )
 
 
-def schedule_sequences(hypotheses, *, budget, detectors=(), contracts=()) -> Allocation:
+def _focus_order(scored, focus):
+    """Hypotheses touching the question's surface, fairly shared between items.
+
+    Round-robin across items, best-ranked first within each. Without the
+    sharing, the item whose functions appear in the most hypotheses takes the
+    whole budget: measured on stonks, a question naming three functions spent
+    13 of 13 surface slots on `Order.initialize` and none on
+    `Order.isValidSignature`, the one it was mostly about.
+    """
+    queues = [
+        [pair for pair in scored if members & set(pair[0].sequence)]
+        for _, members in focus
+    ]
+    ordered, seen = [], set()
+    cursors = [0] * len(queues)
+    while True:
+        progressed = False
+        for index, queue in enumerate(queues):
+            while cursors[index] < len(queue):
+                pair = queue[cursors[index]]
+                cursors[index] += 1
+                key = id(pair[0])
+                if key in seen:
+                    continue
+                seen.add(key)
+                ordered.append(pair)
+                progressed = True
+                break
+        if not progressed:
+            break
+    rest = [pair for pair in scored if id(pair[0]) not in seen]
+    return ordered + rest
+
+
+def schedule_sequences(hypotheses, *, budget, detectors=(), contracts=(),
+                       focus=None) -> Allocation:
     """Order hypotheses for a bounded symbolic budget, and say what was left.
 
     The score stays the primary key. Nothing here promotes a sequence past one
@@ -175,6 +222,13 @@ def schedule_sequences(hypotheses, *, budget, detectors=(), contracts=()) -> All
         tuple(pair[0].sequence),
     ))
 
+    # A question that names a surface decides what is relevant; the score still
+    # ranks inside that. Without a question, nothing changes: this is the
+    # Build 018 ordering exactly.
+    focus = [(label, frozenset(members)) for label, members in (focus or ())]
+    if focus:
+        scored = _focus_order(scored, focus)
+
     executed = [hypothesis for hypothesis, _ in scored[:budget]]
     deferred = [
         Deferred(tuple(hypothesis.sequence), float(hypothesis.score),
@@ -192,8 +246,22 @@ def schedule_sequences(hypotheses, *, budget, detectors=(), contracts=()) -> All
                 if abs(float(hypothesis.score) - boundary_score) < 1e-9
             )
 
+    executed_ids = {id(hypothesis) for hypothesis in executed}
+    coverage = [
+        {
+            "item": label,
+            "functions": sorted(members),
+            "touching": sum(1 for h, _ in scored if members & set(h.sequence)),
+            "executed": sum(
+                1 for h, _ in scored
+                if members & set(h.sequence) and id(h) in executed_ids
+            ),
+        }
+        for label, members in focus
+    ]
+
     return Allocation(
         executed=executed, deferred=deferred, budget=budget,
         considered=len(scored), tied_at_boundary=tied,
-        boundary_score=boundary_score,
+        boundary_score=boundary_score, focus=coverage,
     )

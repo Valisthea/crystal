@@ -65,6 +65,13 @@ describes an action; the question above describes what must be determined.
 else, so the same question about the same world is recognisably the same
 question, and a result can be attributed without a session holding the mapping.
 
+It covers the schema **MAJOR**, not the full version. A MINOR is backward
+compatible by definition, so it cannot change what a question is. Build 020
+hashed the full string — which would have reissued every question's identity on
+each MINOR bump. Documents written under 1.0 still load and still verify against
+the id they were written with; that id is kept as `legacy_question_id` in the
+loaded question's provenance.
+
 Provenance is deliberately excluded from it. *Who* asked does not change *what*
 was asked, and including it would make two identical questions from two callers
 look like two questions.
@@ -130,10 +137,46 @@ Kinds: `function`, `contract`, `contract_family`, `state_variable`,
 An empty surface is valid **only** with `discover_surface=True`. Without it, the
 question is refused with `surface.empty`.
 
-> **Today's limit, stated rather than implied.** A surface does not yet narrow
-> the analysis — Crystal discovers its own. `QuestionRun.unapplied` says so on
-> every run. Pretending the question scoped the work would be exactly the silent
-> substitution this contract exists to prevent.
+### What a surface does (Build 021)
+
+Before anything expensive runs, each item is checked against the parsed code
+(0.2–0.3 s on the reference protocols) and resolved to the entry points it
+covers:
+
+| kind | resolves to |
+| --- | --- |
+| `function` | that function |
+| `contract` | every function of the contract |
+| `state_variable` | the functions that read or write it — `Stonks::X` for one contract, bare `X` for any |
+| `call_path` | `A.f -> B.g`: its members, if every one exists |
+| `asset_flow`, `state_transition`, `contract_family` | **unsupported** — reported, not approximated |
+
+An item that exists nowhere in the analysed code is **unresolved** — a typo, a
+rename, a question written against another revision. If *nothing* resolves, the
+run is refused with `REFUSED_UNRESOLVED_SURFACE` before analysis starts: running
+anyway would answer a question about the rest of the target and file it under
+this one. Resolution uses the same contract set research does, so a surface that
+only exists in a mock is not a surface of the target.
+
+The resolved surface then **decides where the symbolic budget goes**. Sequences
+touching it are executed first, shared round-robin across items so one busy
+function cannot take every slot; score still ranks within each item. Measured,
+same budget of 30:
+
+| | Build 020 | Build 021 |
+| --- | ---: | ---: |
+| stonks — surface sequences executed | 13 / 30 | **30 / 30** |
+| stonks — `Order.isValidSignature` | **0** | 5 (all that exist) |
+| Flyover — surface sequences executed | 5 / 30 | **30 / 30** |
+| Flyover — `isCollateralSufficient` | **0** | 15 |
+
+The surface **does not filter outputs**. Every run reports candidates, detector
+signals and anomalies split `on_surface` / `elsewhere` — a finding one call away
+from the surface is still a finding.
+
+Without a question, nothing changes: the legacy `research()` path produces the
+Build 020 ordering exactly (476 candidates / 150 deltas / 58 signals on stonks,
+before and after).
 
 ## `constraints` — declared means enforced
 
@@ -162,9 +205,26 @@ Evidence without a producer and a world stays usable and stays *marked*
 (`evidence.unattributable`): a step skipped on the strength of an
 unattributable claim is a gap nobody can audit later.
 
-> **Today's limit.** Prior evidence is carried into the plan
-> (`StrategyPlan.prior_evidence`) and recorded. It does not yet narrow
-> selection — that is adaptive strategy, and it is not built.
+### How evidence steers (Build 021, schema 1.1)
+
+Schema 1.1 adds `PriorEvidence.about` — the surface the evidence concerns.
+Polarity is read relative to the question: `supports` is consistent with its
+hypothesis holding, `refutes` against it.
+
+Evidence **reorders the surface, it never removes an item.** Each item takes a
+tier, and the budget reaches tiers in this order:
+
+1. **contradicted** — attributable evidence both supports and refutes it. Reported
+   as a contradiction with both sides named; Crystal does not pick one.
+2. **uncertain** — refuting or inconclusive evidence.
+3. **no prior evidence**.
+4. **supported** — still analysed, later in each round. Skipping it would be
+   trusting a claim Crystal did not establish.
+
+Evidence steers nothing when it cannot be attributed (no producer or source),
+when it has no `about` — Crystal does not infer from a claim's wording which
+part of the target it concerns — or when what it is about does not overlap the
+question's surface. Each such item is listed under `not_steering` with the reason.
 
 ## `required_capabilities`
 
@@ -254,16 +314,26 @@ whose meaning moved in transit must not run under its old identity.
 
 ```python
 run = execute(asked, "/path/to/checkout")
-run.status      # EXECUTED | REFUSED_INVALID | REFUSED_UNPLANNABLE
+run.status      # see below
 run.plan        # considered, selected, obstructions, budget
+run.surface     # resolved, unresolved, unsupported
+run.steering    # evidence tiers, contradictions, what did not steer
 run.narrowed    # what the question actually changed about the run
 run.unapplied   # what it asked for and did not get
+run.on_surface  # outputs split on_surface / elsewhere
 ```
 
-An invalid question **does not run** — a validator whose verdict can be ignored
-is documentation. An unplannable one does not run either, and the obstructions
-come back instead of a result: "blocked" and "found nothing" must never be the
-same answer.
+| status | meaning |
+| --- | --- |
+| `EXECUTED` | the analysis ran |
+| `REFUSED_INVALID` | the question is malformed |
+| `REFUSED_NO_SOURCES` | nothing analysable at the path |
+| `REFUSED_UNRESOLVED_SURFACE` | nothing the question names exists in this code |
+| `REFUSED_UNPLANNABLE` | no strategy can answer it here |
+
+Each refusal separates "analysis not run" from "analysis found nothing". Build
+020 answered a path with no sources as `EXECUTED` with every count at zero —
+indistinguishable from a clean target.
 
 Statuses are local to a run. There is no `COMPLETE` and no `CONFIRMED` here, and
 there will not be.

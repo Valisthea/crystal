@@ -78,6 +78,10 @@ def loads(text: str) -> ResearchQuestion:
                 claim=item.get("claim", ""),
                 polarity=item.get("polarity", "inconclusive"),
                 provenance=dict(item.get("provenance") or {}),
+                about=tuple(
+                    Surface(kind=s.get("kind", ""), identifier=s.get("identifier", ""))
+                    for s in item.get("about") or ()
+                ),
             )
             for item in raw.get("prior_evidence") or ()
         ),
@@ -89,6 +93,13 @@ def loads(text: str) -> ResearchQuestion:
     )
 
     recorded = raw.get("question_id")
+    if (recorded and recorded != question.question_id
+            and question.schema_version == "1.0"
+            and recorded == question.legacy_question_id):
+        # Written by Build 020, whose identity hashed the full version string.
+        # The document is intact; its id was computed by the older formula.
+        # Kept alongside so anything keyed on it can still be found.
+        return question.with_provenance(legacy_question_id=recorded)
     if recorded and recorded != question.question_id:
         raise SemanticDrift(
             f"question_id {recorded} was written, {question.question_id} was "

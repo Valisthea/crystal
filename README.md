@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 020</h1>
+<h1 align="center">Crystal V1.00 Build 021</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -14,7 +14,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-615%20passing-brightgreen">
+  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-642%20passing-brightgreen">
   <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -23,7 +23,7 @@
 
 > ### Beta
 >
-> Crystal is in **beta** and moving fast — twenty builds, several of which
+> Crystal is in **beta** and moving fast — twenty-one builds, several of which
 > corrected the build before them. Treat its output as a starting point for
 > your own reading, never as a verdict.
 >
@@ -660,18 +660,44 @@ because who asked does not change what was asked.
 ### Blocked is not "found nothing"
 
 ```
-EXECUTED  ·  REFUSED_INVALID  ·  REFUSED_UNPLANNABLE
+EXECUTED · REFUSED_INVALID · REFUSED_NO_SOURCES · REFUSED_UNRESOLVED_SURFACE · REFUSED_UNPLANNABLE
 ```
 
-An invalid question does not run; a validator whose verdict can be ignored is
-documentation. An unplannable one does not run either, and the obstructions come
-back in place of a result. `depth="adaptive"` is declared by the schema and not
-implemented, so it is planned as an obstruction rather than quietly downgraded
-to `standard`.
+Each refusal separates "analysis not run" from "analysis found nothing". A path
+with nothing to analyse is refused — Build 020 answered it `EXECUTED` with every
+count at zero, which reads exactly like a clean target. A question about code
+that does not exist is refused before the expensive analysis starts.
+`depth="adaptive"` is declared by the schema and not implemented, so it is
+planned as an obstruction rather than quietly downgraded to `standard`.
+
+### The question decides where the budget goes
+
+Since Build 021 the surface a question names is resolved against the parsed code
+and **steers the symbolic budget** — sequences touching it run first, shared
+round-robin across its items so one busy function cannot take every slot.
+Measured with the same 30 slots:
+
+| | Build 020 | Build 021 |
+| --- | ---: | ---: |
+| stonks — surface sequences executed | 13 / 30 | **30 / 30** |
+| stonks — `Order.isValidSignature` | **0** | 5 (all that exist) |
+| Flyover — `isCollateralSufficient` | **0** | 15 |
+
+Prior evidence placed on the surface (`about`, schema 1.1) **reorders it and never
+removes anything**: contradicted items first — reported as a contradiction with
+both sides named, never resolved by picking one — then uncertain, then
+unexamined, then supported. Evidence that cannot be attributed or placed steers
+nothing and says why. Outputs are split `on_surface` / `elsewhere`, never
+filtered. Without a question the ordering is unchanged.
 
 Every run says what the question changed (`narrowed`) and what it asked for and
-did not get (`unapplied`) — today that includes `affected_surface`, which does
-not yet scope the analysis.
+did not get (`unapplied`) — an unresolved name, an `asset_flow` surface Crystal
+cannot yet map.
+
+Campaigns that return nothing now say why: `absent` — the target has nothing the
+premise covers — or `unreached` — it does, and no executed state delta got
+there. On stonks, 8 of the 9 empty campaigns were `unreached`; on Flyover, 11 of
+14. Most "found nothing" was never "nothing there".
 
 Budgets are ceilings and are taken narrowest, never widest:
 

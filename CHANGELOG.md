@@ -1,5 +1,137 @@
 # Changelog
 
+## Crystal V1.00 Build 021 — the question was asked, and the budget went elsewhere
+
+Steps 6 and 7 of the MIRA roadmap: a question-driven strategy engine, and
+selection that adapts to what the caller already knows. Build 020 made Crystal
+*askable*; this build makes the asking change what Crystal does.
+
+### Measured before anything moved
+
+Same script, same symbolic budget, both reference protocols pinned
+(`lidofinance/stonks@292d063`, `rsksmart/liquidity-bridge-contract@bc01477`):
+
+| | Build 020 | Build 021 |
+| --- | ---: | ---: |
+| stonks, budget 30 — sequences touching the surface | 13 / 30 | **30 / 30** |
+| stonks — `Order.isValidSignature` | **0** | 5 (every one that exists) |
+| stonks — `Stonks.estimateTradeOutput` | 1 | 3 (every one that exists) |
+| Flyover, budget 30 — sequences touching the surface | 5 / 30 | **30 / 30** |
+| Flyover — `isCollateralSufficient` | **0** | 15 |
+
+A question *about* `Order.isValidSignature` used to spend its whole budget
+without executing a single sequence that touched it. The surface was carried,
+validated, recorded in `unapplied` — and ignored. Where it was covered, it was
+by accident: `Order.initialize` took 13 of 13 surface slots.
+
+### What changed
+
+**The surface is resolved against the code before analysis** (new
+`crystal/question/surface.py`). `function`, `contract`, `state_variable` (the
+functions that read or write it) and `call_path` map onto entry points;
+`asset_flow`, `state_transition` and `contract_family` are reported as
+unsupported rather than approximated. Resolution costs 0.2–0.3 s and runs on the
+contract set research uses, so a surface that only exists in a mock is not a
+surface of the target.
+
+**The resolved surface steers the symbolic budget** (`schedule_sequences(focus=…)`).
+Sequences touching it are executed first, **shared round-robin across items** —
+without the sharing, the item appearing in the most hypotheses takes everything,
+which is what the baseline showed. Score still ranks within each item. Without a
+question the ordering is Build 018's exactly: the legacy scan of stonks produces
+476 candidates, 150 deltas and 58 signals before and after.
+
+**Prior evidence reorders the surface and never removes an item** (new
+`crystal/question/steering.py`, schema 1.1 `PriorEvidence.about`). Items are
+reached contradicted → uncertain → unexamined → supported. A contradiction —
+attributable evidence on both sides — is reported with both sides named, and
+Crystal does not pick one. A supported item is still analysed, later in each
+round: skipping it would be trusting a claim Crystal did not establish. Evidence
+that cannot be attributed, has no `about`, or does not overlap the surface steers
+nothing and is listed under `not_steering` with the reason. Crystal does not infer
+from a claim's wording which part of the target it concerns.
+
+**Outputs are partitioned, never filtered.** Every run reports candidates,
+detector signals and anomalies `on_surface` / `elsewhere`. On the steered stonks
+run: 90 candidates on the surface, 386 elsewhere; 19 anomalies, all on it.
+
+**Campaigns that return nothing say why.** `present`, `absent` — the target has
+nothing the premise covers — or `unreached` — it does, and no executed state
+delta got there, either because the budget stopped short or because no sequence
+hypothesis was generated for it. Judged with each campaign's own vocabulary; no
+new judgement about the code.
+
+| empty campaigns | stonks | Flyover |
+| --- | ---: | ---: |
+| `unreached` | **8** | **11** |
+| `absent` | 1 | 3 |
+
+Most "found nothing" was never "nothing there". That is a limit of the budget and
+of sequence generation, now visible instead of reading as a property of the target.
+
+### Two refusals that close silent failures
+
+**`REFUSED_NO_SOURCES`.** Found while measuring: Build 020's `execute()` on a path
+with no sources answered `EXECUTED` with every count at zero — indistinguishable
+from a clean target. The scratchpad holding the targets had been cleaned between
+sessions; the run looked fine.
+
+**`REFUSED_UNRESOLVED_SURFACE`.** A question about code that does not exist is
+refused before analysis starts. A partly resolved surface runs, and names the
+missing part in `unapplied`.
+
+### Identity no longer moves on a MINOR bump
+
+Build 020's `question_id` hashed the full schema version, so every MINOR release
+would have reissued the identity of every question — contradicting "the same
+question is recognised". Identity now covers the MAJOR only. The first MINOR
+(1.1) exercises it: a question document **actually written by Build 020**,
+frozen as `tests/fixtures/question_build020.json` before `model.py` was touched,
+loads under 1.1, verifies against the id it was written with, and keeps that id
+as `legacy_question_id`.
+
+### Tests found defending the defect
+
+Seven Build 020 execution tests failed under the new runner. They asked about
+`Order.isValidSignature` against a fixture containing only `V.open/close/skew` —
+and had passed, because the runner scanned the whole project and filed the result
+under that question. The refusal is right; the tests were rewritten to ask about
+code that exists. It is the pattern `CONTRIBUTING.md` names: a synthetic test that
+agrees with a broken engine.
+
+### Mutations
+
+| | mutation | killed by |
+| --- | --- | --- |
+| K | scheduler ignores the surface | focus coverage |
+| L | supported evidence skips an item | "never removes an item" |
+| M | unresolved surface runs anyway | `REFUSED_UNRESOLVED_SURFACE` |
+| N | an empty path reported as executed | `REFUSED_NO_SOURCES` |
+| O | identity hashes the MINOR again | MINOR-stable identity |
+
+A first draft of mutation M contained dead code behind `if False` — a test that
+looked like a mutation and mutated nothing. Rewritten before commit.
+
+### Tests
+
+`tests/test_v300_steering.py` — 27 tests. The named invariant gate grows from
+45 to 53. 642 collected: 640 passed, 2 xfailed under tree-sitter; 617 passed,
+24 skipped, 1 xfailed under `CRYSTAL_NO_TREESITTER=1`.
+
+### What this does not do
+
+`depth="adaptive"` is still an obstruction. Single-pass ordering already puts
+contradicted and uncertain items first and shares the budget across them; a
+multi-round loop only helps if round one's results should change round two's
+ranking, and nothing measured here shows it would. Building it without a
+benchmark that could show the difference would be adding a planner on faith.
+
+`asset_flow`, `state_transition` and `contract_family` surfaces are not mapped.
+The steering changes **where** the budget goes, not **how much** Crystal can say:
+the anomaly on stonks is the same single finding reached by more surface paths,
+and no claim is made that research quality improved — only that a question now
+gets the analysis it asked for.
+
 ## Crystal V1.00 Build 020 — Crystal can finally be asked something
 
 Step 5 of the MIRA roadmap: the `ResearchQuestion` input contract. Until now

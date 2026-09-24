@@ -54,6 +54,13 @@ class CampaignResult:
     # Which scope rule rejected how many sequences, so a campaign that reported
     # nothing says why rather than looking like a clean result.
     pruned_by: dict[str, int] = field(default_factory=dict)
+    # Why a campaign produced what it did. `present` — candidates found.
+    # `absent` — the target has nothing this campaign's premise covers.
+    # `unreached` — it does, and no executed state delta got there. The last two
+    # both report zero candidates and mean opposite things: one is a property
+    # of the target, the other of the budget.
+    surface: str = ""
+    surface_reason: str = ""
 
     @property
     def top_candidates(self) -> list[CampaignCandidate]:

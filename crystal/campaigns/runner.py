@@ -60,6 +60,8 @@ def run_campaign(
             campaign_id=campaign.campaign_id,
             campaign_name=campaign.name,
             warning="no contracts matched the campaign scope",
+            surface="absent",
+            surface_reason="no contract in the target matches the campaign's contract scope",
         )
 
     candidates: list[CampaignCandidate] = []
@@ -237,6 +239,7 @@ def run_campaign(
     # Deduplicate by invariant + delta shape.
     top = _deduplicate(top)
 
+    surface, surface_reason = _surface(campaign, scoped_contracts, top)
     return CampaignResult(
         campaign_id=campaign.campaign_id,
         campaign_name=campaign.name,
@@ -245,6 +248,62 @@ def run_campaign(
         total_sequences_explored=explored,
         total_sequences_pruned=pruned,
         pruned_by=dict(sorted(pruned_by.items())),
+        surface=surface,
+        surface_reason=surface_reason,
+    )
+
+
+# The inverse of KIND_BY_CATEGORY: which state category a declared transition
+# kind implies. Kinds with no category (`auth-action`, `approval-action`, ...)
+# are absent here on purpose — nothing can say from state alone whether the
+# target has them, so they never make a campaign `absent`.
+CATEGORY_BY_KIND = {kind: category for category, kind in KIND_BY_CATEGORY.items()}
+
+
+def _surface(campaign, scoped_contracts, candidates):
+    """Whether a campaign's premise exists in the target at all.
+
+    Judged with the campaign's own vocabulary — its contract and function
+    scope, and the same `classify_state` categories its filters use — so this
+    adds no new judgement about the code, only a question the runner never
+    asked: when a campaign returned nothing, was there anything to find?
+    """
+    if candidates:
+        return "present", f"{len(candidates)} candidate(s)"
+    scope = campaign.scope
+    if not scoped_contracts:
+        return "absent", "no contract in the target matches the campaign's contract scope"
+    functions = [f"{c.name}.{f.name}" for c in scoped_contracts for f in c.functions]
+    if scope.allowed_functions and not any(scope.accepts_function(f) for f in functions):
+        return "absent", "no function in the target matches the campaign's function scope"
+
+    wanted = set(scope.allowed_categories)
+    if not wanted and campaign.transitions:
+        implied = {CATEGORY_BY_KIND.get(t.kind.value) for t in campaign.transitions}
+        # Only when every declared kind implies a category: one that does not
+        # could be present in ways state names cannot show.
+        if None not in implied:
+            wanted = implied
+    if wanted:
+        present = {
+            classify_state(variable.name)
+            for contract in scoped_contracts for variable in contract.state_vars
+        }
+        if not present & wanted:
+            return "absent", (
+                f"no state in the target classifies as {', '.join(sorted(wanted))}"
+            )
+    if scope.allowed_state:
+        names = {
+            bare_name(variable.name)
+            for contract in scoped_contracts for variable in contract.state_vars
+        }
+        if not names & set(scope.allowed_state):
+            return "absent", "none of the state variables the campaign names exists"
+    return "unreached", (
+        "the target has state this campaign covers, and no state delta executed "
+        "in this run reached it — either the symbolic budget stopped short, or "
+        "no sequence hypothesis was generated for it"
     )
 
 
@@ -269,6 +328,15 @@ def run_campaigns(
     operator_ids = set(getattr(registry, "operator_campaign_ids", None) or set())
     priority_by_id = {c.campaign_id: c.priority for c in campaigns}
     _deduplicate_across_campaigns(campaign_results, operator_ids, priority_by_id)
+    for cr in campaign_results:
+        # Deduplication moves a shared chain under one campaign. The others
+        # still found it; saying "present" with an empty list and no reason
+        # would read as a contradiction.
+        if cr.surface == "present" and not cr.candidates:
+            cr.surface_reason = (
+                "found candidate(s), each also selected by another campaign and "
+                "reported there once"
+            )
     return campaign_results
 
 

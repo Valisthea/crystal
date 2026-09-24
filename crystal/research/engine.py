@@ -145,6 +145,9 @@ def run_research(result):
         # A `ResearchQuestion` may narrow this; nothing may widen it. Absent a
         # question, the build default stands exactly as before.
         budget=result.get("sequence_budget_limit", SEQUENCE_BUDGET),
+        # The surface a `ResearchQuestion` named, as resolved function groups.
+        # Absent a question this is empty and the ordering is Build 018's.
+        focus=result.get("sequence_focus"),
         detectors=result.get("detectors", ()),
         contracts=contracts,
     )

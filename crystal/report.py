@@ -169,6 +169,8 @@ def _campaign_payload(result) -> list[dict]:
             "total_sequences_pruned": cr.total_sequences_pruned,
             "pruned_by": dict(getattr(cr, "pruned_by", {}) or {}),
             "warning": cr.warning,
+            "surface": getattr(cr, "surface", ""),
+            "surface_reason": getattr(cr, "surface_reason", ""),
         })
     return out
 

@@ -159,7 +159,9 @@ Crystal must never assume every candidate it emits becomes a MIRA hypothesis.
 | 2 · hypothesis-model duplication | 019 |
 | 3 · falsification persistence | 019 |
 | 4 · provenance hardening | 019 |
-| 5 · question model | next |
+| 5 · question model | 020 — [research-question.md](research-question.md) |
+| 6–7 · question-driven strategy, evidence steering | 021 — surface and prior evidence steer the budget; `adaptive` depth still an obstruction |
+| 8 · experiment model | next |
 
 Steps 17 and 22 of the earlier architecture brief — isolation and the symbolic
 budget — were taken out of order as Builds 017 and 018, because the first was a
