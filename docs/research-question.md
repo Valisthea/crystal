@@ -82,7 +82,7 @@ asked.with_provenance(asked_by="arcadia").question_id == asked.question_id  # Tr
 
 ## `schema_version`
 
-`MAJOR.MINOR`, currently `1.0`.
+`MAJOR.MINOR`, currently `1.1` (1.1 added `PriorEvidence.about`).
 
 * **MAJOR** — a breaking semantic change. A reader refuses a MAJOR it does not
   know, before interpreting any field. Reading unknown fields under the old
@@ -339,6 +339,50 @@ Statuses are local to a run. There is no `COMPLETE` and no `CONFIRMED` here, and
 there will not be.
 
 ---
+
+## From another process
+
+`execute()` is the Python entry. A caller in another process — or another
+language — uses the CLI and never imports Crystal:
+
+```bash
+crystal ask question.json --project ./checkout            # envelope on stdout
+crystal ask - --project ./checkout --quiet < question.json
+crystal ask question.json --project ./checkout -o result.json
+crystal ask --print-schema question                       # what to build
+crystal ask --print-schema result                         # what comes back
+```
+
+The reply is always exactly one `crystal-question-result/1.0` envelope, and the
+process exit code always equals its `exit_code`:
+
+| status | exit |
+| --- | ---: |
+| `EXECUTED` | 0 |
+| `REFUSED_INVALID` | 3 |
+| `REFUSED_NO_SOURCES` | 4 |
+| `REFUSED_UNRESOLVED_SURFACE` | 5 |
+| `REFUSED_UNPLANNABLE` | 6 |
+| `REFUSED_UNREADABLE` | 10 |
+
+`1` and `2` are left to the interpreter and to argument errors, which is why the
+refusals start at 3. `REFUSED_UNREADABLE` covers everything a caller can send
+that is not a readable question — not JSON, the wrong shape, an unknown schema
+MAJOR, a document whose meaning changed in transit. It still comes back as an
+envelope, with `question: null`, never as a traceback.
+
+`analysis_ran` is true only for `EXECUTED`, and `evidence` — the
+`crystal-arcadia/2.0` payload a scan produces, nested whole — is present if and
+only if it is. Those two fields, not the counts, separate "not run" from "found
+nothing".
+
+Both JSON Schemas (draft 2020-12) are published in `schemas/` and kept
+byte-identical to the code by a test. The question schema describes what Crystal
+reads and allows unknown top-level fields, because a MINOR extension may add
+some. The result schema is closed, and it encodes the rules above: evidence on a
+refusal, or exit code 0 on anything but `EXECUTED`, fails validation — so a
+consumer that validates is protected from a faulty producer as well as from a
+faulty transport.
 
 ## Migrating from `research(...)`
 

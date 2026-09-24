@@ -1,0 +1,269 @@
+{
+  "$id": "https://github.com/Valisthea/crystal/schemas/crystal-research-question-1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "affected_surface": {
+              "minItems": 1
+            }
+          },
+          "required": [
+            "affected_surface"
+          ]
+        },
+        {
+          "properties": {
+            "discover_surface": {
+              "const": true
+            }
+          },
+          "required": [
+            "discover_surface"
+          ]
+        }
+      ],
+      "description": "An empty surface is valid only when discovery is asked for."
+    }
+  ],
+  "description": "A question put to Crystal. question_id is optional on input: Crystal derives it from the content, and if one is present it must match, or the document is refused as having drifted in transit.",
+  "properties": {
+    "affected_surface": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "identifier": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "asset_flow",
+              "call_path",
+              "contract",
+              "contract_family",
+              "function",
+              "state_transition",
+              "state_variable"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "identifier"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "budget": {
+      "additionalProperties": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "propertyNames": {
+        "enum": [
+          "experiments",
+          "symbolic_sequences",
+          "wall_time_seconds"
+        ]
+      },
+      "type": "object"
+    },
+    "constraints": {
+      "propertyNames": {
+        "enum": [
+          "allowed_paths",
+          "excluded_paths",
+          "max_sequence_length",
+          "symbolic_budget",
+          "timeout_seconds"
+        ]
+      },
+      "type": "object"
+    },
+    "depth": {
+      "enum": [
+        "adaptive",
+        "deep",
+        "shallow",
+        "standard"
+      ]
+    },
+    "discover_surface": {
+      "type": "boolean"
+    },
+    "expected_output": {
+      "items": {
+        "enum": [
+          "candidate",
+          "counterexample",
+          "differential",
+          "evidence",
+          "inconclusive",
+          "proof",
+          "trace"
+        ]
+      },
+      "type": "array"
+    },
+    "hypothesis": {
+      "type": "string"
+    },
+    "prior_evidence": {
+      "items": {
+        "properties": {
+          "about": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "identifier": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "asset_flow",
+                    "call_path",
+                    "contract",
+                    "contract_family",
+                    "function",
+                    "state_transition",
+                    "state_variable"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "identifier"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "claim": {
+            "type": "string"
+          },
+          "evidence_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "polarity": {
+            "enum": [
+              "inconclusive",
+              "refutes",
+              "supports"
+            ]
+          },
+          "provenance": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "claim"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "question": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "question_id": {
+      "type": "string"
+    },
+    "required_capabilities": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "pattern": "^1\\.\\d+$",
+      "type": "string"
+    },
+    "source_snapshot": {
+      "anyOf": [
+        {
+          "required": [
+            "revision"
+          ]
+        },
+        {
+          "required": [
+            "tree_digest"
+          ]
+        }
+      ],
+      "description": "Must identify a world: revision or tree_digest. Use revision 'resolve-at-execution' to ask explicitly for the checkout as found; it is never assumed.",
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "chain": {
+          "type": "string"
+        },
+        "configuration_digest": {
+          "type": "string"
+        },
+        "deployment": {
+          "type": "string"
+        },
+        "revision": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tree_digest": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "target": {
+      "properties": {
+        "chain": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "string"
+        },
+        "deployment": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "target_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_id"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "question",
+    "target",
+    "source_snapshot"
+  ],
+  "title": "Crystal ResearchQuestion, schema 1.x",
+  "type": "object"
+}

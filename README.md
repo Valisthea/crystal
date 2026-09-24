@@ -2,7 +2,7 @@
   <img src="assets/crystal-cover.png" alt="Project Crystal — static analyzer for smart contracts" width="100%">
 </p>
 
-<h1 align="center">Crystal V1.00 Build 021</h1>
+<h1 align="center">Crystal V1.00 Build 022</h1>
 
 <p align="center">
   <em>A protocol-oriented security research engine for smart contracts and Substrate runtimes.</em><br>
@@ -14,7 +14,7 @@
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-3572A5">
   <img alt="languages" src="https://img.shields.io/badge/targets-Solidity%20%7C%20Rust%20%7C%20Go%20%7C%20Move%20%7C%20Vyper-1f6feb">
   <img alt="dependencies" src="https://img.shields.io/badge/core%20dependencies-0-brightgreen">
-  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-642%20passing-brightgreen">
+  <img alt="tests · both parser paths" src="https://img.shields.io/badge/tests-678%20passing-brightgreen">
   <img alt="status" src="https://img.shields.io/badge/status-beta-orange">
   <img alt="licence" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -23,7 +23,7 @@
 
 > ### Beta
 >
-> Crystal is in **beta** and moving fast — twenty-one builds, several of which
+> Crystal is in **beta** and moving fast — twenty-two builds, several of which
 > corrected the build before them. Treat its output as a starting point for
 > your own reading, never as a verdict.
 >
@@ -250,10 +250,11 @@ crystal doctor                                   # what is installed, what is is
 crystal scan ./examples --no-solc --format markdown
 crystal scan ./target --format sarif -o crystal.sarif
 crystal validate ./target --backend medusa --out-dir ./artifacts
+crystal ask question.json --project ./target     # a research question, from any process
 ```
 
-Asking a question is a Python API today — see
-[Asking Crystal a question](#asking-crystal-a-question).
+See [Asking Crystal a question](#asking-crystal-a-question) for what goes in
+`question.json` and what comes back.
 
 ## Commands
 
@@ -268,6 +269,8 @@ Asking a question is a Python API today — see
 | `crystal campaign list` | list registered campaign packs |
 | `crystal campaign run <id> <target>` | run a single campaign against a project |
 | `crystal capabilities` | list engine capabilities |
+| `crystal ask <question.json> --project <path>` | answer a research question; always one `crystal-question-result/1.0` envelope, and an exit code that matches it |
+| `crystal ask --print-schema question\|result` | print the JSON Schema a caller builds against |
 | `crystal update` | self-update a git checkout |
 
 ### `scan`
@@ -526,6 +529,53 @@ Identity is content-derived and covers the schema MAJOR only, so the same
 question is recognised across releases; questions persist, reload in another
 process and verify against the identity they were written with. A capability is
 a kind of analysis (`symbolic`), never a tool name (`halmos`).
+
+### From another process: `crystal ask`
+
+An orchestrator does not need to import Crystal. It writes a question document,
+calls the CLI, and reads one JSON document back:
+
+```bash
+crystal ask question.json --project ./stonks/contracts > result.json
+echo $?                                # always equals result.json's exit_code
+cat question.json | crystal ask - --project ./stonks/contracts --quiet
+```
+
+Whatever happens, the answer is exactly **one `crystal-question-result/1.0`
+envelope** on stdout (progress goes to stderr) — including when the question
+could not be read at all. Nothing a caller can send produces a traceback instead.
+
+```json
+{
+  "schema_version": "crystal-question-result/1.0",
+  "producer": { "role": "evidence-only", "decides_severity": false,
+                "decides_submission": false, "decides_research_state": false },
+  "question_id": "…",  "question": { "…": "the question as Crystal read it" },
+  "status": "EXECUTED", "exit_code": 0, "analysis_ran": true, "reason": "",
+  "validation": {}, "plan": {}, "surface": {}, "steering": {},
+  "narrowed": {}, "unapplied": [], "on_surface": {},
+  "evidence": { "schema_version": "crystal-arcadia/2.0", "…": "…" }
+}
+```
+
+| status | exit | `analysis_ran` | `evidence` |
+| --- | ---: | :---: | --- |
+| `EXECUTED` | 0 | true | the `crystal-arcadia/2.0` payload |
+| `REFUSED_INVALID` | 3 | false | `null` |
+| `REFUSED_NO_SOURCES` | 4 | false | `null` |
+| `REFUSED_UNRESOLVED_SURFACE` | 5 | false | `null` |
+| `REFUSED_UNPLANNABLE` | 6 | false | `null` |
+| `REFUSED_UNREADABLE` — not JSON, unknown schema major, meaning changed in transit | 10 | false | `null` |
+
+`analysis_ran` and `evidence` are what separate "not run" from "found nothing" —
+a refusal and a clean result both contain no findings. The evidence is not a
+second format: it is the same `crystal-arcadia/2.0` payload a scan writes,
+nested whole. Both documents have published JSON Schemas —
+[`schemas/crystal-research-question-1.json`](schemas/crystal-research-question-1.json)
+and [`schemas/crystal-question-result-1.json`](schemas/crystal-question-result-1.json),
+or `crystal ask --print-schema question|result` — and the result schema itself
+forbids evidence on a refusal and a zero exit code on anything but `EXECUTED`,
+so a consumer that validates is protected even from a faulty producer.
 
 Full contract, validation codes, depths and migration from `research()`:
 [docs/research-question.md](docs/research-question.md).
@@ -873,8 +923,11 @@ crystal scan ./target --format arcadia -o handoff.json
 }
 ```
 
-The input side is the [`ResearchQuestion`](#asking-crystal-a-question) contract;
-the capability registry (`crystal.question.export()`) lists what Crystal can be
+That is the output of a scan. The question side is
+[`crystal ask`](#from-another-process-crystal-ask): a question document in, a
+`crystal-question-result/1.0` envelope out, the scan payload nested inside it
+when the analysis ran. The capability registry (`crystal.question.export()`)
+lists what Crystal can be
 asked for, without claiming anything about what is installed on a given machine.
 Crystal runs standalone and imports nothing from the layers above. What must
 never move into it — global scheduling, coverage, saturation, hypothesis
@@ -890,7 +943,7 @@ pins every v1 key.
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                                  # 642 tests
+pytest -q                                  # 678 tests
 CRYSTAL_NO_TREESITTER=1 pytest -q          # the regex fallback path — must stay green
 CRYSTAL_NO_FOUNDRY=1 pytest -q             # skip real-EVM execution
 pytest -q -m invariant                     # the structural promises, by name

@@ -1,7 +1,7 @@
 # Integrating Crystal into MIRA
 
-Written against Build 019. Everything stated about the current code was checked
-in the repository, not recalled.
+Written against Build 019, updated at Build 022. Everything stated about the
+current code was checked in the repository, not recalled.
 
 ## The short answer
 
@@ -39,22 +39,27 @@ Builds 017–019 — `isolation`, `sequence_budget` and `producer_provenance`.
 That payload is already close to what §37 asks a MIRA adapter to expose. It is
 the **evidence** half.
 
-## The half that does not exist
+## The input half — built in Builds 020 to 022
 
-There is no way to ask Crystal a question. The only programmatic entry is:
+When this document was first written there was no way to ask Crystal a
+question: the only entry was `research(project, use_solc=..., packs=...)`, which
+describes how to run the tool and never what to settle. That is no longer so.
 
-```python
-research(project, use_solc=True, languages=None, run_detector_pass=True,
-         use_foundry=True, detectors=None, include_tests=False, packs=())
-```
+| build | what a caller can now do |
+| --- | --- |
+| 020 | express a question as a `ResearchQuestion` — world, surface, constraints, budget, depth, prior evidence — validated, versioned, persistable |
+| 021 | have that question steer the analysis: its surface takes the symbolic budget, prior evidence reorders it, contradictions are reported |
+| 022 | ask **from another process**: `crystal ask question.json --project <path>`, one `crystal-question-result/1.0` envelope back, an exit code that matches it, JSON Schemas for both documents in `schemas/` |
 
-No objective, no budget, no prior evidence, no validation depth, no requested
-capability. MIRA can read Crystal and cannot direct it, which means Crystal is
-currently a *scanner* MIRA consumes rather than an *instrument* MIRA operates.
+This is what makes Crystal an instrument Arcadia can operate rather than a
+scanner it consumes. A non-Python orchestrator needs nothing from this repository
+but the CLI and the two schema files.
 
-§36's operations — `experiment(hypothesis)`, `symbolically_test(property)`,
-`trace(scenario)`, `compare(baseline, candidate)` — do not exist as addressable
-entry points. The work behind them does; the addressing does not.
+What remains: §36's finer operations — `experiment(hypothesis)`,
+`symbolically_test(property)`, `compare(baseline, candidate)` — are not separate
+entry points. A question with the right capabilities and surface covers the
+first two in practice; there is no recorded experiment object yet (step 8), and
+no local contradiction record between engines (step 13).
 
 ## The decision this needs before the adapter is written
 
@@ -103,21 +108,19 @@ Checked against the roadmap, not asserted:
 
 ## What is missing, in the roadmap's order
 
-Steps 1 and 2–4 are done. What remains before an adapter is worth writing:
+Steps 1 to 7 are done, and the out-of-process entry an adapter needs exists.
+What remains:
 
 | step | gap |
 | --- | --- |
-| 5 | **question model** — no `AnalysisQuestion`; Crystal answers "what did you find" and cannot be asked "can you establish X" |
-| 6–7 | strategy engine is question-blind; every campaign runs on every target |
-| 8 | **experiment model** — backend runs produce results, not recorded experiments with prediction and environment |
-| 9 | backend capabilities are declared but not exported as a registry a parent can read |
+| 8 | **experiment model** — backend runs produce results, not recorded experiments with prediction and environment, attached to the question that asked for them |
+| 9 | the capability registry exists (`crystal.question.export()`) but is not yet exposed on the CLI with health and cost for a parent's registry to ingest |
 | 13 | **contradiction handling** — if Halmos holds a property under constraints and Foundry produces a counterexample, Crystal has nowhere to record the disagreement |
 | 17 | no benchmark corpus; each build measures on targets chosen for that build |
 | 28 | resource metadata is partial — timeouts exist, memory and parallelism do not |
 
-Step 5 is the one that changes Crystal's character. Everything after it is
-easier once a question is a first-class object, and the adapter at step 19 is
-mostly a rename of operations that already exist by then.
+Step 8 is the next one worth doing: it is what lets a consumer reason about
+*what was tried* rather than only about what was found.
 
 ## What must never move into Crystal
 
@@ -161,6 +164,7 @@ Crystal must never assume every candidate it emits becomes a MIRA hypothesis.
 | 4 · provenance hardening | 019 |
 | 5 · question model | 020 — [research-question.md](research-question.md) |
 | 6–7 · question-driven strategy, evidence steering | 021 — surface and prior evidence steer the budget; `adaptive` depth still an obstruction |
+| out-of-process entry and result envelope | 022 — `crystal ask`, `crystal-question-result/1.0`, `schemas/` |
 | 8 · experiment model | next |
 
 Steps 17 and 22 of the earlier architecture brief — isolation and the symbolic

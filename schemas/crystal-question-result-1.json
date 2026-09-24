@@ -1,0 +1,318 @@
+{
+  "$id": "https://github.com/Valisthea/crystal/schemas/crystal-question-result-1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "else": {
+        "properties": {
+          "analysis_ran": {
+            "const": false
+          },
+          "evidence": {
+            "type": "null"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "const": "EXECUTED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "analysis_ran": {
+            "const": true
+          },
+          "evidence": {
+            "type": "object"
+          },
+          "exit_code": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "EXECUTED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "REFUSED_INVALID"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 3
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "REFUSED_NO_SOURCES"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 4
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "REFUSED_UNRESOLVED_SURFACE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 5
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "REFUSED_UNPLANNABLE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 6
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "REFUSED_UNREADABLE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "exit_code": {
+            "const": 10
+          }
+        }
+      }
+    },
+    {
+      "else": {
+        "properties": {
+          "question": {
+            "type": "object"
+          },
+          "question_id": {
+            "type": "string"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "status": {
+            "const": "REFUSED_UNREADABLE"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "question": {
+            "type": "null"
+          },
+          "question_id": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "description": "What Crystal returns for one question. Exactly one envelope per call, whatever happened. analysis_ran separates 'not run' from 'found nothing'; evidence is the crystal-arcadia/2.0 payload, present if and only if the analysis ran.",
+  "properties": {
+    "analysis_ran": {
+      "type": "boolean"
+    },
+    "evidence": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "properties": {
+            "schema_version": {
+              "const": "crystal-arcadia/2.0"
+            }
+          },
+          "required": [
+            "schema_version",
+            "producer"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "exit_code": {
+      "enum": [
+        0,
+        3,
+        4,
+        5,
+        6,
+        10
+      ]
+    },
+    "narrowed": {
+      "type": "object"
+    },
+    "on_surface": {
+      "type": "object"
+    },
+    "plan": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "producer": {
+      "properties": {
+        "build": {
+          "type": "string"
+        },
+        "decides_research_state": {
+          "const": false
+        },
+        "decides_severity": {
+          "const": false
+        },
+        "decides_submission": {
+          "const": false
+        },
+        "role": {
+          "const": "evidence-only"
+        },
+        "tool": {
+          "const": "crystal"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "version",
+        "build",
+        "role",
+        "decides_severity",
+        "decides_submission",
+        "decides_research_state"
+      ],
+      "type": "object"
+    },
+    "question": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "question_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "crystal-question-result/1.0"
+    },
+    "status": {
+      "enum": [
+        "EXECUTED",
+        "REFUSED_INVALID",
+        "REFUSED_NO_SOURCES",
+        "REFUSED_UNRESOLVED_SURFACE",
+        "REFUSED_UNPLANNABLE",
+        "REFUSED_UNREADABLE"
+      ]
+    },
+    "steering": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "surface": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "unapplied": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "validation": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "producer",
+    "question_id",
+    "question",
+    "status",
+    "exit_code",
+    "analysis_ran",
+    "reason",
+    "validation",
+    "plan",
+    "surface",
+    "steering",
+    "narrowed",
+    "unapplied",
+    "on_surface",
+    "evidence"
+  ],
+  "title": "crystal-question-result/1.0",
+  "type": "object"
+}

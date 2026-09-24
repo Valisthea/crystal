@@ -1,5 +1,109 @@
 # Changelog
 
+## Crystal V1.00 Build 022 — askable from another process, answered exactly once
+
+Two things an orchestrator on the other side of a process boundary needs before
+it can operate Crystal, and neither existed: a way in that is not a Python
+import, and a single versioned document to read back. Build 020 made Crystal
+*askable*; Build 021 made the asking steer the analysis; this build makes it
+callable by Arcadia, MIRA, or anything that can write JSON and run a command.
+
+### `crystal ask`
+
+```bash
+crystal ask question.json --project ./checkout       # envelope on stdout
+crystal ask - --project ./checkout --quiet < question.json
+crystal ask --print-schema question|result
+```
+
+`--project` is separate from the question on purpose: the question names the
+target, and only the caller knows where it is checked out.
+
+### `crystal-question-result/1.0`
+
+Whatever happens, the caller gets **exactly one envelope**, and the process exit
+code always equals the envelope's `exit_code`:
+
+| status | exit |
+| --- | ---: |
+| `EXECUTED` | 0 |
+| `REFUSED_INVALID` | 3 |
+| `REFUSED_NO_SOURCES` | 4 |
+| `REFUSED_UNRESOLVED_SURFACE` | 5 |
+| `REFUSED_UNPLANNABLE` | 6 |
+| `REFUSED_UNREADABLE` | 10 |
+
+`REFUSED_UNREADABLE` is new: malformed JSON, the wrong shape, an unknown schema
+MAJOR, a document whose meaning changed in transit. It comes back as an
+envelope with `question: null`, never as a traceback — a caller across a
+process boundary gets a document to branch on.
+
+`analysis_ran` is true only for `EXECUTED`, and `evidence` is present if and only
+if it is. Those two fields, not the counts, separate "not run" from "found
+nothing". The evidence is **not a second format**: it is the
+`crystal-arcadia/2.0` payload a scan writes, nested whole — one contract for
+what Crystal found, this envelope for what was asked and what happened to the
+asking. The producer block adds `decides_research_state: false` to the existing
+refusals of severity and submission, in every envelope.
+
+### Published schemas
+
+`schemas/crystal-research-question-1.json` and
+`schemas/crystal-question-result-1.json`, JSON Schema draft 2020-12, kept
+byte-identical to the code by a test. A non-Python orchestrator needs nothing
+else from this repository.
+
+The result schema is closed and **encodes the contract, not only the shape**:
+evidence on a refusal fails validation, and so does exit code 0 on anything but
+`EXECUTED`. A consumer that validates is protected from a faulty producer as
+well as a faulty transport. The question schema refuses what the validator
+refuses where a schema can express it — a snapshot identifying no world, an
+empty surface without discovery, an unenforceable constraint, an unknown depth,
+a foreign MAJOR — and allows unknown top-level fields, because a MINOR may add
+some.
+
+### Measured
+
+Driven through the CLI against `lidofinance/stonks@292d063`, every outcome
+produced a schema-valid envelope whose status and exit code agree: `EXECUTED` 0,
+`REFUSED_UNRESOLVED_SURFACE` 5, `REFUSED_NO_SOURCES` 4, `REFUSED_UNREADABLE` 10.
+A question document written by Build 020 is answered, and keeps its original id
+as `legacy_question_id`. stdout carries only the envelope; progress goes to
+stderr.
+
+### Found while testing
+
+The first draft of the tests named its fixture directory `target/`. Every run
+was refused with `REFUSED_NO_SOURCES` — correctly: `target/` is Cargo's build
+directory and discovery skips it. Build 021's refusal did its job on the tests
+themselves; under Build 020 the same mistake would have read as a clean, empty
+result. A first draft of mutation P also carried a dead helper; rewritten before
+commit.
+
+### Mutations
+
+| | mutation | killed by |
+| --- | --- | --- |
+| P | a malformed document raises instead of being answered | `REFUSED_UNREADABLE` envelope |
+| Q | evidence attached to a refusal | the result schema |
+| R | a refusal reported with exit code 0 | the result schema |
+
+### Tests
+
+`tests/test_v300_ask.py` — 36 tests, including real subprocess runs of the CLI.
+Schema checks need `jsonschema`, added to the `dev` extra only; the
+zero-dependency core job installs pytest alone and skips them with a stated
+reason. The named invariant gate grows from 53 to 62. 678 collected: 676 passed,
+2 xfailed under tree-sitter; 653 passed, 24 skipped, 1 xfailed under
+`CRYSTAL_NO_TREESITTER=1`.
+
+### What this does not do
+
+It does not add analysis. The envelope reports exactly what `execute()` already
+did. There is still no recorded experiment object and no contradiction record
+between engines — roadmap steps 8 and 13 — and the capability registry is not
+yet exposed on the CLI with health and cost.
+
 ## Crystal V1.00 Build 021 — the question was asked, and the budget went elsewhere
 
 Steps 6 and 7 of the MIRA roadmap: a question-driven strategy engine, and

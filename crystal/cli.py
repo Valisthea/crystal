@@ -152,7 +152,76 @@ def build_parser() -> argparse.ArgumentParser:
     update = sub.add_parser("update", help="self-update a git checkout")
     update.add_argument("--check", action="store_true",
                         help="report the available update without applying it")
+
+    ask = sub.add_parser(
+        "ask",
+        help="answer a ResearchQuestion document; always emits one "
+             "crystal-question-result/1.0 envelope",
+    )
+    ask.add_argument("question", nargs="?",
+                     help="path to a question document, or - to read stdin")
+    ask.add_argument("--project",
+                     help="where the target is checked out. The question names "
+                          "the target; only the caller knows its path")
+    ask.add_argument("--output", "-o", help="write the envelope here, not stdout")
+    ask.add_argument("--no-solc", action="store_true")
+    ask.add_argument("--quiet", action="store_true")
+    ask.add_argument("--print-schema", choices=("question", "result"),
+                     help="print the JSON Schema for a question or a result, and exit")
     return parser
+
+
+# ---------------------------------------------------------------------------
+# ask
+# ---------------------------------------------------------------------------
+
+def _ask(args) -> int:
+    """One question in, one envelope out, one exit code that agrees with it.
+
+    Whatever the caller sent — a good question, a malformed one, a file that is
+    not JSON — the answer is a `crystal-question-result/1.0` document, never a
+    traceback. The exit code is the envelope's own `exit_code`, so a caller can
+    branch on either without the two ever disagreeing.
+    """
+    from .question.envelope import ask, unreadable
+    from .question.schemas import SCHEMAS
+
+    if args.print_schema:
+        print(json.dumps(SCHEMAS[args.print_schema], indent=2, sort_keys=True))
+        return 0
+    if not args.question or not args.project:
+        print("crystal ask: a question document and --project are both required",
+              file=sys.stderr)
+        return 2
+
+    if args.question == "-":
+        document = sys.stdin.read()
+    else:
+        try:
+            document = Path(args.question).read_text(encoding="utf-8")
+        except OSError as exc:
+            envelope = unreadable(f"the question document could not be read: {exc}")
+            return _emit_envelope(envelope, args)
+
+    if not args.quiet:
+        print(f"crystal {__version__} build {__build__} answering "
+              f"{args.question} against {Path(args.project).resolve()}",
+              file=sys.stderr)
+    envelope = ask(document, args.project, use_solc=not args.no_solc)
+    return _emit_envelope(envelope, args)
+
+
+def _emit_envelope(envelope: dict, args) -> int:
+    text = json.dumps(envelope, indent=2, sort_keys=True, default=list)
+    if args.output:
+        Path(args.output).write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text + "\n")
+    if not args.quiet:
+        print(f"status {envelope['status']} (exit {envelope['exit_code']})"
+              + (f": {envelope['reason']}" if envelope["reason"] else ""),
+              file=sys.stderr)
+    return envelope["exit_code"]
 
 
 # ---------------------------------------------------------------------------
@@ -959,6 +1028,9 @@ def main(argv=None) -> int:
 
     if args.command == "campaign":
         return _campaign(args)
+
+    if args.command == "ask":
+        return _ask(args)
 
     if args.command == "scan":
         target = Path(args.project)
